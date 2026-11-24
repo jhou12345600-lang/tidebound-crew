@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { createWorld } from './world.js';
 import { buildShip, buildChest, buildPerson } from './shipmesh.js';
-import { newWorld, step, act, pack, unpack, smoothShips, shipPose, cannonMuzzle, shipVel, TIER, ballStep, muzzleV, allShips, AMMO, AMMO_KEYS, KINDS, waterlineLocal, maxHP, gunReload } from './sim.js';
+import { newWorld, step, act, pack, unpack, smoothShips, shipPose, cannonMuzzle, shipVel, TIER, ballStep, muzzleV, allShips, AMMO, AMMO_KEYS, KINDS, waterlineLocal, maxHP, gunReload, ROLES, MAX_CREW, hireCrew } from './sim.js';
 import { createFX } from './fx.js';
 import { sea, waveHeight } from './waves.js';
 import { ISLANDS, terrainH, groundH, MERCHANT, MERCHANTS, WORLD_R, nearestIsland, CASTLES, seaAt } from './geo.js';
@@ -89,9 +89,10 @@ function doAct(m) {
   if (isHost) { act(W, myId, m, simPlayers()); flushEvents(); }
   else send('ac', m);
 }
+function stCode() { return !me.station ? null : me.station.cannon !== undefined ? me.station.cannon : me.station; }
 function simPlayers() {
-  const l = [{ id: myId, onShip: me.onShip, lp: me.lp.toArray(), wp: me.wp.toArray(), dead: me.dead > 0 }];
-  for (const r of remotes.values()) l.push({ id: r.id, onShip: !!r.s, lp: r.s ? r.p : null, wp: r.s ? null : r.p, dead: !!r.d });
+  const l = [{ id: myId, onShip: me.onShip, lp: me.lp.toArray(), wp: me.wp.toArray(), dead: me.dead > 0, st: stCode() }];
+  for (const r of remotes.values()) l.push({ id: r.id, onShip: !!r.s, lp: r.s ? r.p : null, wp: r.s ? null : r.p, dead: !!r.d, st: r.st ?? null });
   return l;
 }
 function flushEvents() {
@@ -183,9 +184,23 @@ function handleEvent(e) {
     case 'ghit': FX.blood(e.x, terrainH(e.x, e.z) + 1.1, e.z); break;
     case 'gdown': { FX.blood(e.x, terrainH(e.x, e.z) + 0.8, e.z, 2); FX.dirt(e.x, terrainH(e.x, e.z) + 0.3, e.z, 0.4); if (dist(e.x, e.z) < 80) toast(`⚔ 擊倒守軍！+${e.g} 金`); break; }
     case 'sea': showSea(e.n); break;
+    case 'splashm': FX.skip(e.x, e.z); break;
+    case 'mswing': sfx.swing(); break;
+    case 'mdig': FX.dirt(e.x, terrainH(e.x, e.z) + 0.2, e.z, 0.15); sfx.dig(); break;
+    case 'cdown': FX.blood(e.x, terrainH(e.x, e.z) + 0.8, e.z, 2); break;
   }
 }
 const ruinSmoke = [];
+// 雇用船員的模型：依職業換衣服顏色＋頭巾，頭上有名牌
+const crewMeshes = new Map();
+function crewMesh(c) {
+  const R0 = ROLES[c.role], m = buildPerson(R0.col, 0x5a1a14);
+  const band = new THREE.Mesh(new THREE.CylinderGeometry(0.205, 0.205, 0.08, 12), new THREE.MeshStandardMaterial({ color: 0xc4422b })); band.position.y = 1.74; m.add(band);
+  if (c.role === 'marine') { const bl = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.85, 0.02), new THREE.MeshStandardMaterial({ color: 0xd5dbe2, metalness: 0.3, roughness: 0.4 })); bl.position.set(0, -0.9, 0.3); bl.rotation.x = 1.2; m.userData.arms[1].add(bl); }
+  if (c.role === 'carpenter') { const hm = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.35, 0.08), new THREE.MeshStandardMaterial({ color: 0x5a3a22 })); hm.position.set(0, -0.75, 0.1); m.userData.arms[1].add(hm); }
+  addTag(m, `${R0.name}・${c.name}`); m.userData.role = c.role;
+  return m;
+}
 function showSea(n) { const el = $('seaName'); el.textContent = n; el.classList.remove('show'); void el.offsetWidth; el.classList.add('show'); sfx.chime(); }
 // 守軍模型
 const guardMeshes = new Map();
@@ -292,6 +307,7 @@ function openShopMenu() {
     bounty: () => doAct({ a: 'bounty' }),
     pardon: () => doAct({ a: 'pardon' }),
     upgrade: k => doAct({ a: 'upgrade', k }),
+    hire: r => doAct({ a: 'hire', role: r }),
   }, M.name);
 }
 
@@ -305,6 +321,7 @@ addEventListener('keydown', e => {
   }
   keys[e.code] = true;
   if (e.code === 'Enter' && net) { e.preventDefault(); $('chatIn').classList.remove('hidden'); $('chatIn').focus(); document.exitPointerLock?.(); return; }
+  if (e.code === 'KeyC') { const o = $('crewOv'); o.classList.toggle('hidden'); if (!o.classList.contains('hidden')) { document.exitPointerLock?.(); renderCrew(); } }
   if (e.code === 'KeyF') { const o = $('frOv'); o.classList.toggle('hidden'); if (!o.classList.contains('hidden')) { document.exitPointerLock?.(); renderFriends($('friendList2'), acc, ui_h, true); } }
   if (e.code === 'KeyH') { $('helpOv').classList.toggle('hidden'); if (!$('helpOv').classList.contains('hidden')) document.exitPointerLock?.(); }
   if (e.code === 'KeyM') { const o = $('mapOv'); o.classList.toggle('hidden'); if (!o.classList.contains('hidden')) drawMap(W, me, myPos(), remotes); }
@@ -466,7 +483,7 @@ function updatePlayer(dt) {
   if (net && netT <= 0) {
     netT = 0.1;
     const p = me.onShip ? me.lp : me.wp;
-    send('p', { id: myId, n: me.name, c: me.color, s: me.onShip ? 1 : 0, p: [+p.x.toFixed(2), +p.y.toFixed(2), +p.z.toFixed(2)], y: +me.yaw.toFixed(2), it: me.item, ca: me.carry, d: me.dead > 0 ? 1 : 0, host: isHost ? 1 : 0 });
+    send('p', { id: myId, n: me.name, c: me.color, s: me.onShip ? 1 : 0, p: [+p.x.toFixed(2), +p.y.toFixed(2), +p.z.toFixed(2)], y: +me.yaw.toFixed(2), it: me.item, ca: me.carry, d: me.dead > 0 ? 1 : 0, host: isHost ? 1 : 0, st: stCode() });
   }
 }
 function nearRail() { return Math.abs(me.lp.x) > deckW(me.lp.z) - 0.9; }
@@ -582,6 +599,7 @@ function syncEntities(dt) {
     tSeen.add(tr.id); let m = treasureMeshes.get(tr.id);
     if (!m) { m = tr.tier === 0 ? bottleMesh() : buildChest(tr.tier); treasureMeshes.set(tr.id, m); }
     if (tr.st === 'ship') { if (m.parent !== myShip.cargo) myShip.cargo.add(m); m.position.set(tr.lx, tr.ly, tr.lz); m.rotation.set(0, tr.id, 0); }
+    else if (tr.st === 'carry' && String(tr.carrier).startsWith('m')) { const cm = crewMeshes.get(+String(tr.carrier).slice(1)); if (cm) { if (m.parent !== cm) cm.add(m); m.position.set(0, 0.9, 0.45); m.rotation.set(0, 0, 0); m.scale.setScalar(0.8); m.visible = true; } else m.visible = false; }
     else if (tr.st === 'carry') { const r = remotes.get(tr.carrier); if (r && r.mesh) { if (m.parent !== r.mesh) r.mesh.add(m); m.position.set(0, 0.9, 0.45); m.rotation.set(0, 0, 0); m.scale.setScalar(0.8); } else m.visible = false; }
     else { if (m.parent !== scene) scene.add(m); m.scale.setScalar(1); m.visible = true; const fl = tr.st === 'float' || tr.st === 'bottle'; m.position.set(tr.x, fl ? waveHeight(tr.x, tr.z) - (tr.tier ? 0.25 : 0) : tr.y, tr.z); m.rotation.set(fl ? Math.sin(t + tr.id) * 0.2 : 0, tr.id * 1.3, fl ? Math.cos(t * 0.8 + tr.id) * 0.2 : 0); }
   }
@@ -596,6 +614,18 @@ function syncEntities(dt) {
     m.position.x += (c.x - m.position.x) * Math.min(1, dt * 8); m.position.z += (c.z - m.position.z) * Math.min(1, dt * 8); m.position.y = terrainH(m.position.x, m.position.z) + (c.mv ? Math.abs(Math.sin(t * 14)) * 0.08 : 0);
     m.rotation.y = c.h;
   }
+  const cwSeen = new Set();
+  for (const c of W.crew) {
+    cwSeen.add(c.id); let m = crewMeshes.get(c.id);
+    if (!m || m.userData.role !== c.role) { if (m) m.parent?.remove(m); m = crewMesh(c); crewMeshes.set(c.id, m); }
+    const parent = c.on ? myShip.root : scene; if (m.parent !== parent) { parent.add(m); m.position.set(c.x, c.y, c.z); }
+    const k = Math.min(1, dt * 6), prev = m.position.clone();
+    m.position.x += (c.x - m.position.x) * k; m.position.y += (c.y - m.position.y) * k; m.position.z += (c.z - m.position.z) * k;
+    m.rotation.y = c.h || 0; m.visible = !c.down || !!c.on;
+    m.rotation.x = c.down && !c.on ? -1.4 : 0;
+    m.userData.animate(c.mv ? 3.5 : Math.min(3, prev.distanceTo(m.position) / Math.max(dt, 1e-3)), dt, c.task === '交戰中' ? Math.abs(Math.sin(performance.now() / 120)) : 0);
+  }
+  for (const [id, m] of crewMeshes) if (!cwSeen.has(id)) { m.parent?.remove(m); crewMeshes.delete(id); }
   const gSeen = new Set();
   for (const g of W.guards) {
     if (Math.hypot(g.x - cpos.x, g.z - cpos.z) > 450) continue;
@@ -659,6 +689,7 @@ function updateHUD(dt) {
   const ev = [];
   if (W.fleet) { const left = W.npcs.filter(e => W.fleet.ids.includes(e.id) && e.sink <= 0).length; ev.push(`⚔ 黑鯊艦隊來襲：剩 ${left} 艘`); }
   const allies = W.npcs.filter(e => e.team === 1 && e.sink <= 0).length; if (allies) ev.push(`🛡 海巡隊友軍 ${allies} 艘`);
+  if (W.crew.length) { const cnt = {}; for (const c of W.crew) cnt[c.role] = (cnt[c.role] || 0) + 1; ev.push(`🧑‍✈️ 船員 ${W.crew.length}/${MAX_CREW}：${Object.entries(cnt).map(([k, n]) => ROLES[k].name + n).join('、')}（C 下命令）`); if (!$('crewOv').classList.contains('hidden')) renderCrew(); }
   if (W.bounty) ev.push(`🎯 懸賞：${W.bounty.done}/${W.bounty.need}（${W.bounty.reward} 金）`);
   if (W.wanted >= 0.05) ev.push(`🚨 通緝：<b style="color:#ffcf4a">${'★'.repeat(Math.ceil(W.wanted))}${'☆'.repeat(5 - Math.ceil(W.wanted))}</b>`);
   { const cp0 = myPos(); let ci = 0, bd = 1e9; CASTLES.forEach((C, i) => { const d = Math.hypot(C.x - cp0.x, C.z - cp0.z); if (d < bd) { bd = d; ci = i; } }); const C = CASTLES[ci], F = W.forts[ci];
@@ -719,15 +750,37 @@ function beginPlay() {
   setTimeout(() => toast('📜 你們有 2 張藏寶圖。按 5 拿出來看，M 打開航海圖'), 4000);
   if (net) $('netst').textContent = (isHost ? '房主' : '船員') + '｜房號 ' + room;
 }
+// ---------- 船員面板 ----------
+function renderCrew() {
+  const O = W.orders, box = $('crewBody');
+  const btn = (k, v, t, on) => `<button class="${on ? 'pri' : ''}" data-k="${k}" data-v="${v}">${t}</button>`;
+  const has = r => W.crew.some(c => c.role === r);
+  box.innerHTML = `
+    <div class="lab">命令</div>
+    <div class="ord"><span>砲手</span>${btn('fire', 1, '自由開火', O.fire)}${btn('fire', 0, '停火', !O.fire)}</div>
+    <div class="ord"><span>帆手</span>${btn('sail', 1, '全帆', O.sail === 1)}${btn('sail', 0.5, '半帆', O.sail === 0.5)}${btn('sail', 0, '收帆', O.sail === 0)}${btn('sail', 'null', '我自己調', O.sail == null)}</div>
+    <div class="ord"><span>錨手</span>${btn('anchor', 0, '起錨', W.ship.anchor < 0.5)}${btn('anchor', 1, '下錨', W.ship.anchor >= 0.5)}</div>
+    <div class="ord"><span>陸戰隊</span>${btn('marines', 'raid', '上岸攻城', O.marines === 'raid')}${btn('marines', 'dig', '上岸挖寶', O.marines === 'dig')}${btn('marines', 'back', '回船', O.marines === 'back')}${btn('marines', 'stay', '留在船上', O.marines === 'stay')}</div>
+    ${!has('gunner') && !has('sailor') && !has('anchor') && !has('marine') && !has('carpenter') ? '<p class="note">還沒有船員。到任何港口找收購商「招募船員」。</p>' : ''}
+    <div class="lab">船員（${W.crew.length}/${MAX_CREW}）</div>
+    <div class="flist">${W.crew.map(c => `<div class="fr"><span class="dot ${c.down ? '' : 'on'}"></span><span class="nm">${ROLES[c.role].name}・${esc(c.name)}<small>${c.down ? '受傷休養中' : esc(c.task || '待命')}${c.role === 'marine' ? `　體力 ${Math.max(0, Math.round(c.hp))}` : ''}</small></span><button class="ghost" data-dis="${c.id}">解雇</button></div>`).join('')}</div>`;
+  box.onclick = e => {
+    const b = e.target.closest('button'); if (!b) return;
+    if (b.dataset.dis) { if (b.dataset.sure) doAct({ a: 'dismiss', id: +b.dataset.dis }); else { b.dataset.sure = 1; b.textContent = '確定？'; return; } }
+    else if (b.dataset.k) doAct({ a: 'order', k: b.dataset.k, v: b.dataset.v === 'null' ? null : isNaN(+b.dataset.v) ? b.dataset.v : +b.dataset.v });
+    setTimeout(renderCrew, 150);
+  };
+}
+
 // ---------- 帳號、存檔 ----------
 const acc = new Accounts(); setKeyOf(keyOf);
 function applySave(sv) {
   if (!sv) return;
   W.gold = sv.gold | 0; for (const k in W.up) if (sv.up && sv.up[k] != null) W.up[k] = sv.up[k];
-  W.ship.nc = 4 + 2 * W.up.guns; if (sv.sup) Object.assign(W.ship.sup, sv.sup); W.wanted = sv.wanted || 0; W.sunk = sv.sunk || 0;
+  W.ship.nc = 4 + 2 * W.up.guns; if (Array.isArray(sv.crew)) { W.crew = []; for (const [r, n] of sv.crew) if (ROLES[r]) hireCrew(W, r, n); } if (sv.sup) Object.assign(W.ship.sup, sv.sup); W.wanted = sv.wanted || 0; W.sunk = sv.sunk || 0;
   toast(`📦 讀取存檔：${W.gold} 金、強化等級已恢復`);
 }
-function doSave() { if (isHost && acc.me && started) acc.save({ gold: W.gold, up: W.up, sup: W.ship.sup, wanted: W.wanted, sunk: W.sunk }); }
+function doSave() { if (isHost && acc.me && started) acc.save({ gold: W.gold, up: W.up, sup: W.ship.sup, wanted: W.wanted, sunk: W.sunk, crew: W.crew.map(c => [c.role, c.name]) }); }
 setInterval(doSave, 45000);
 function joinRoom(code) {
   if (started) { location.href = location.pathname + '?room=' + encodeURIComponent(code) + (location.search.includes('broker=') ? '&broker=' + new URLSearchParams(location.search).get('broker') : ''); return; }
@@ -760,5 +813,6 @@ const ui_h = {
   },
 };
 initUI(ui_h);
+$('bCrewX').onclick = () => { $('crewOv').classList.add('hidden'); $('cv').requestPointerLock?.(); };
 addEventListener('beforeunload', () => { doSave(); if (net) send('bye', { id: myId, host: isHost ? 1 : 0 }); if (acc.me) acc.presence(null); });
 window.__tb = { acc, doSave, npcMeshes, FX, myShip, camera, W: () => W, me, setW: w => W = w, scene, world, act: m => doAct(m), handleEvent };   // 除錯用

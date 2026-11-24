@@ -1,6 +1,6 @@
 // ===== 介面：標題、提示、地圖、藏寶圖、收購商 =====
 import { ISLANDS, terrainH, WORLD_R, SEAS, CASTLES, PORTS, seaAt } from './geo.js';
-import { TIER, UPS, upCost } from './sim.js';
+import { TIER, UPS, upCost, ROLES, MAX_CREW } from './sim.js';
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -16,7 +16,7 @@ export function chatLine(n, t) {
   const d = document.createElement('div'); d.innerHTML = `<b>${esc(n)}</b>：${esc(t)}`; const l = $('chatL'); l.appendChild(d); while (l.children.length > 6) l.firstChild.remove();
   setTimeout(() => d.remove(), 20000);
 }
-const OVS = ['helpOv', 'mapOv', 'shopOv', 'msgOv', 'frOv'];
+const OVS = ['helpOv', 'mapOv', 'shopOv', 'msgOv', 'frOv', 'crewOv'];
 export function anyOverlay() { return OVS.some(id => !$(id).classList.contains('hidden')); }
 export function closeAll() { OVS.forEach(id => $(id).classList.add('hidden')); }
 
@@ -131,6 +131,11 @@ export function openShop(W, act, portName = '港口') {
   head('補給（船要停在港口附近）');
   add('補滿彈藥與木板：砲彈 30、鏈彈 6、火焰彈 6、木板 18（60 金）', act.restock, 'tealb', W.gold < 60);
   add(`爆裂彈 ×4（150 金，船上現有 ${S.sup.x}）`, act.buyx, 'tealb', W.gold < 150);
+  head(`招募船員（${W.crew.length}/${MAX_CREW}，按 C 下命令）`);
+  { const grid = document.createElement('div'); grid.className = 'upg'; box.appendChild(grid);
+    for (const r in ROLES) { const R0 = ROLES[r], n = W.crew.filter(c => c.role === r).length; const b = document.createElement('button'); b.disabled = W.gold < R0.cost || W.crew.length >= MAX_CREW;
+      b.innerHTML = `<b>${R0.name}</b> <span class="lv">船上 ${n} 名</span><small>${R0.desc}</small><span class="cost">雇用 ${R0.cost} 金</span>`;
+      b.onclick = () => { act.hire(r); setTimeout(() => openShop(W, act, portName), 150); }; grid.appendChild(b); } }
   for (const grp of ['武器', '船隻', '大砲']) {
     head(`強化：${grp}（全體船員共用）`);
     const grid = document.createElement('div'); grid.className = 'upg'; box.appendChild(grid);

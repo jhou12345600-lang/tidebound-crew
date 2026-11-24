@@ -34,6 +34,7 @@ input{font-family:inherit;font-size:16px;padding:10px 12px;border-radius:10px;bo
 .tabs{display:flex;gap:6px;margin-top:6px}.tabs button{flex:1;background:#e8dcbc;box-shadow:none}.tabs button.on{background:var(--ink);color:var(--paper)}
 .who{display:flex;align-items:center;justify-content:space-between;font-weight:900;font-size:18px;margin:4px 0}
 button.sm{padding:6px 12px;min-height:36px;font-size:14px}
+.ord{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:4px 0}.ord span{width:64px;font-weight:900}.ord button{padding:8px 12px;min-height:40px;font-size:14px}
 .flist{display:flex;flex-direction:column;gap:6px;margin-top:8px;max-height:30vh;overflow:auto}
 .fr{display:flex;align-items:center;gap:8px;background:#fffaf0;border-radius:10px;padding:6px 10px;font-size:15px}
 .fr .dot{width:12px;height:12px;border-radius:50%;background:#b9ae95;flex:none}.fr .dot.on{background:#3aa55a}
@@ -164,6 +165,7 @@ button.sm{padding:6px 12px;min-height:36px;font-size:14px}
   </div>
 </div>
 <div id="frOv" class="ov hidden"><div class="sheet"><h2>好友</h2><p style="margin:0 0 8px">邀請好友上你們的船：好友會收到通知，按一下就能加入。</p><div class="row"><input id="frIn2" maxlength="12" placeholder="輸入好友的帳號"><button class="tealb" id="bAddFr2">加好友</button></div><div id="friendList2" class="flist"></div><div class="btns"><button class="pri" id="bFrX">關閉</button></div></div></div>
+<div id="crewOv" class="ov hidden"><div class="sheet"><h2>船員</h2><div id="crewBody"></div><div class="btns"><button class="pri" id="bCrewX">關閉</button></div></div></div>
 <div id="invPop" class="hidden"><div id="invTxt"></div><div class="row"><button class="pri" id="invGo">上船</button><button id="invNo">忽略</button></div></div>
 <div id="helpOv" class="ov hidden"><div class="sheet"><h2>船員手冊</h2>
   <div class="keys">
@@ -177,8 +179,9 @@ button.sm{padding:6px 12px;min-height:36px;font-size:14px}
     <b>M</b><span>航海圖</span>
     <b>Enter</b><span>聊天</span>
     <b>F</b><span>好友清單（邀請好友上船）</span>
+    <b>C</b><span>船員面板：對雇來的砲手、帆手、錨手、陸戰隊下命令</span>
   </div>
-  <p style="line-height:1.6;font-size:15px"><b>出航三步：</b>船頭絞盤按 E 起錨 → 桅杆旁按 E，用 W/S 放帆、A/D 轉帆吃風 → 船尾舵輪按 E，A/D 轉向。<br><b>船被打破：</b>到下層船艙找破洞，拿木板（3）對著洞按住左鍵修補（吃水線以下的洞進水最快）；用水桶（4）在艙裡舀水，到甲板再按左鍵倒掉。<b>起火：</b>在船邊欄杆打海水，對著火潑。<b>帆被打爛：</b>拿木板到桅杆按住左鍵修。彈藥箱在下層船艙。<br><b>大戰：</b>出海一段時間後黑鯊艦隊會來襲，海巡隊友軍會來幫忙；五片海域各有一座城堡：先用砲轟掉砲塔，再上岸用劍和火槍打倒守軍，金庫就會打開。<br><b>國際海警：</b>平常只抓海盜；你們打海警、闖進海警基地就會被通緝，星數越高派來的船越強。擊沉海警可以撈到軍餉箱，港口可以付罰金撤銷通緝。<br><b>強化：</b>在任何港口的收購商那裡用金幣強化劍、火槍、體力、船殼、裝甲、船帆、大砲數量、砲管、火藥。<br><b>挖寶：</b>拿藏寶圖（5）對照島的形狀與 X，上島後拿鏟子（2）在 X 處挖，扛回船上，開回潮聲港賣給收購商。</p>
+  <p style="line-height:1.6;font-size:15px"><b>出航三步：</b>船頭絞盤按 E 起錨 → 桅杆旁按 E，用 W/S 放帆、A/D 轉帆吃風 → 船尾舵輪按 E，A/D 轉向。<br><b>船被打破：</b>到下層船艙找破洞，拿木板（3）對著洞按住左鍵修補（吃水線以下的洞進水最快）；用水桶（4）在艙裡舀水，到甲板再按左鍵倒掉。<b>起火：</b>在船邊欄杆打海水，對著火潑。<b>帆被打爛：</b>拿木板到桅杆按住左鍵修。彈藥箱在下層船艙。<br><b>大戰：</b>出海一段時間後黑鯊艦隊會來襲，海巡隊友軍會來幫忙；五片海域各有一座城堡：先用砲轟掉砲塔，再上岸用劍和火槍打倒守軍，金庫就會打開。<br><b>國際海警：</b>平常只抓海盜；你們打海警、闖進海警基地就會被通緝，星數越高派來的船越強。擊沉海警可以撈到軍餉箱，港口可以付罰金撤銷通緝。<br><b>雇船員：</b>在港口花金幣雇砲手（自動開砲）、帆手（自動吃風）、錨手、船匠（自動補洞滅火）、陸戰隊（上岸攻城、挖寶、搬寶箱）。下錨停在島邊，按 C 命令陸戰隊上岸。<br><b>強化：</b>在任何港口的收購商那裡用金幣強化劍、火槍、體力、船殼、裝甲、船帆、大砲數量、砲管、火藥。<br><b>挖寶：</b>拿藏寶圖（5）對照島的形狀與 X，上島後拿鏟子（2）在 X 處挖，扛回船上，開回潮聲港賣給收購商。</p>
   <div class="btns"><button class="pri" id="bHelpX">知道了</button></div></div></div>
 
 <div id="mapOv" class="ov hidden"><canvas id="mapCv" width="900" height="900"></canvas></div>

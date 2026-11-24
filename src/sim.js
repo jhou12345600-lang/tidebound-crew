@@ -93,6 +93,7 @@ export function newWorld(seed = (R() * 1e9) | 0) {
     npcs: [], treasures: [], quests: [], crabs: [], guards: [], balls: [],
     forts: CASTLES.map(newFort), up: Object.fromEntries(Object.keys(UPS).map(k => [k, 0])), bounty: null, fleet: null, wanted: 0,
     spawnT: 100, navyT: 150, fleetT: 330, bottleT: 40, events: [], sunk: 0,
+    crew: [], orders: { fire: 1, sail: null, marines: 'stay' },
   };
   CASTLES.forEach((C, i) => spawnGuards(W, i));
   const r = rng(seed);
@@ -422,26 +423,27 @@ function stepForts(W, dt, players) {
       W.events.push({ e: 'msg', t: `🗝 ${C.name}攻陷！金庫打開了，寶箱就在城堡中央，扛回船上！`, warn: 1 }, { e: 'coin' }, { e: 'fortdown', c: ci });
     }
   });
-  // 守軍
+  // 守軍（目標：上岸的玩家和陸戰隊）
+  const landTargets = players.concat(marineTargets(W));
   for (const g of W.guards) {
     if (g.dead) continue;
     const C = CASTLES[g.f]; g.cd -= dt; g.mv = 0;
     let tgt = null, td = 42;
-    for (const pl of players) if (!pl.onShip && !pl.dead && pl.wp) { const d = Math.hypot(pl.wp[0] - g.x, pl.wp[2] - g.z); if (d < td && Math.hypot(pl.wp[0] - g.hx, pl.wp[2] - g.hz) < 80 && Math.abs(pl.wp[1] - terrainH(g.x, g.z)) < 6) { td = d; tgt = pl; } }
+    for (const pl of landTargets) if (!pl.onShip && !pl.dead && pl.wp) { const d = Math.hypot(pl.wp[0] - g.x, pl.wp[2] - g.z); if (d < td && Math.hypot(pl.wp[0] - g.hx, pl.wp[2] - g.hz) < 80 && Math.abs(pl.wp[1] - terrainH(g.x, g.z)) < 6) { td = d; tgt = pl; } }
     if (!tgt && Math.hypot(W.ship.x - C.x, W.ship.z - C.z) > 400) { g.x += (g.hx - g.x) * Math.min(1, dt); g.z += (g.hz - g.z) * Math.min(1, dt); continue; }
     const move = (tx, tz, sp) => { const a = Math.atan2(tx - g.x, tz - g.z), nx = g.x + Math.sin(a) * sp * dt, nz = g.z + Math.cos(a) * sp * dt; if (terrainH(nx, nz) > 1) { g.x = nx; g.z = nz; g.mv = 1; } g.h = a; };
     if (!tgt) { if (Math.hypot(g.hx - g.x, g.hz - g.z) > 1) move(g.hx, g.hz, 2.2); continue; }
     g.h = Math.atan2(tgt.wp[0] - g.x, tgt.wp[2] - g.z);
     if (g.k === 's') {
       if (td > 1.6) move(tgt.wp[0], tgt.wp[2], 3.7);
-      else if (g.cd <= 0) { g.cd = 1.1; W.events.push({ e: 'dmg', pid: tgt.id, n: 8 + 3 * C.tier, src: 'guard' }, { e: 'gswing', id: g.id }); }
+      else if (g.cd <= 0) { g.cd = 1.1; hurtTarget(W, tgt, 8 + 3 * C.tier, 'guard'); W.events.push({ e: 'gswing', id: g.id }); }
     } else {
       if (td > 24) move(tgt.wp[0], tgt.wp[2], 3.2); else if (td < 7) move(g.x * 2 - tgt.wp[0], g.z * 2 - tgt.wp[2], 2.8);
       if (g.cd <= 0 && td < 34) {
         g.cd = 2.8 + R(); const hit = R() < (C.team === 3 ? 0.6 : 0.5) - td * 0.006;
         const gy = terrainH(g.x, g.z);
         W.events.push({ e: 'shot', x: g.x + Math.sin(g.h) * 0.6, y: gy + 1.4, z: g.z + Math.cos(g.h) * 0.6, tx: tgt.wp[0] + (hit ? 0 : (R() - .5) * 3), ty: tgt.wp[1] + 1.2 + (hit ? 0 : R() * 1.5), tz: tgt.wp[2] + (hit ? 0 : (R() - .5) * 3) });
-        if (hit) W.events.push({ e: 'dmg', pid: tgt.id, n: 12 + 3 * C.tier, src: 'gun' });
+        if (hit) hurtTarget(W, tgt, 12 + 3 * C.tier, 'gun');
       }
     }
   }
@@ -522,6 +524,7 @@ export function step(W, dt, players) {
   collideShips(W);
   stepBalls(W, dt, players);
   stepForts(W, dt, players);
+  stepCrew(W, dt, players);
   for (const pl of players) if (pl.onShip && pl.lp && !pl.dead && pl.lp[1] > DECK - 0.5) for (const f of W.ship.fires) if (Math.hypot(pl.lp[0] - f.x, pl.lp[2] - f.z) < 1.3 * (0.6 + f.i)) { pl._burn = (pl._burn || 0) + dt; if (pl._burn > 0.6) { pl._burn = 0; W.events.push({ e: 'dmg', pid: pl.id, n: 7, src: 'fire' }); } }
 
   // NPC 沉沒與戰利品
@@ -566,17 +569,180 @@ export function step(W, dt, players) {
   }
   for (const t of W.treasures) if (t.st === 'float' || t.st === 'bottle') { t.x += Math.sin(W.wind.a) * dt * 0.3; t.z += Math.cos(W.wind.a) * dt * 0.3; }
   W.treasures = W.treasures.filter(t => t.st !== 'sold' && t.st !== 'gone');
+  const crabTargets = players.concat(marineTargets(W));
   for (const c of W.crabs) {
     c.atk = Math.max(0, c.atk - dt);
     let tgt = null, td = 28;
-    for (const pl of players) if (!pl.onShip && !pl.dead && pl.wp) { const d = Math.hypot(pl.wp[0] - c.x, pl.wp[2] - c.z); if (d < td && Math.abs(pl.wp[1] - terrainH(c.x, c.z)) < 4) { td = d; tgt = pl; } }
+    for (const pl of crabTargets) if (!pl.onShip && !pl.dead && pl.wp) { const d = Math.hypot(pl.wp[0] - c.x, pl.wp[2] - c.z); if (d < td && Math.abs(pl.wp[1] - terrainH(c.x, c.z)) < 4) { td = d; tgt = pl; } }
     c.mv = 0;
     if (tgt) {
       const a = Math.atan2(tgt.wp[0] - c.x, tgt.wp[2] - c.z); c.h = a;
       if (td > 1.4) { const nx = c.x + Math.sin(a) * 3.4 * dt, nz = c.z + Math.cos(a) * 3.4 * dt; if (terrainH(nx, nz) > 0.6) { c.x = nx; c.z = nz; c.mv = 1; } }
-      else if (c.atk <= 0) { c.atk = 1.3; W.events.push({ e: 'dmg', pid: tgt.id, n: 11, src: 'crab' }); }
+      else if (c.atk <= 0) { c.atk = 1.3; hurtTarget(W, tgt, 11, 'crab'); }
     }
   }
+}
+
+
+// ---------- 雇用船員 ----------
+export const ROLES = {
+  gunner: { name: '砲手', cost: 250, desc: '自動瞄準、裝填、開砲，轟敵船和城堡砲塔', col: 0x2b2b2b },
+  sailor: { name: '帆手', cost: 200, desc: '自動把帆轉到最吃風的角度，聽令放帆／收帆', col: 0x3d6f8a },
+  anchor: { name: '錨手', cost: 150, desc: '聽令起錨、下錨，起錨速度快一倍', col: 0x6c5a3a },
+  carpenter: { name: '船匠', cost: 300, desc: '自動補洞、舀水、滅火（用船上的木板）', col: 0x8a5a34 },
+  marine: { name: '陸戰隊', cost: 350, desc: '跟你上岸打城堡守軍、挖藏寶圖的寶藏、把寶箱搬回船', col: 0x7a1717 },
+};
+export const MAX_CREW = 10;
+const CREW_NAMES = ['阿福', '大熊', '小六', '老陳', '阿海', '鐵牛', '阿標', '石頭', '小蝦', '阿水', '黑皮', '阿勇', '大頭', '阿德', '小黑', '老吳', '阿財', '小龍'];
+export function hireCrew(W, role, name) {
+  const used = new Set(W.crew.map(c => c.name));
+  const nm = name || CREW_NAMES.find(n => !used.has(n)) || '水手' + (W.crew.length + 1);
+  const c = { id: W.seq++, role, name: nm, on: 1, x: 0, y: DECK, z: -3, hp: 100, cd: 1 + R() * 2, task: '', h: 0, mv: 0, carry: 0, down: 0 };
+  W.crew.push(c); return c;
+}
+function marineTargets(W) { return W.crew.filter(c => c.role === 'marine' && !c.on && c.down <= 0).map(c => ({ id: 'm' + c.id, wp: [c.x, c.y, c.z], onShip: false, dead: false, marine: c })); }
+function hurtTarget(W, tgt, n, src) {
+  if (!tgt.marine) { W.events.push({ e: 'dmg', pid: tgt.id, n, src }); return; }
+  const c = tgt.marine; c.hp -= n * 0.8;
+  if (c.hp <= 0 && c.down <= 0) {
+    c.down = 40; c.hp = 0; c.task = 'down';
+    if (c.carry) { const t = W.treasures.find(t => t.id === c.carry); if (t) { t.st = 'ground'; t.carrier = null; t.x = c.x; t.z = c.z; t.y = terrainH(c.x, c.z); } c.carry = 0; }
+    W.events.push({ e: 'msg', t: `🩹 陸戰隊員${c.name}受傷倒下了，40 秒後會被抬回船上休養`, warn: 1 }, { e: 'cdown', x: c.x, z: c.z });
+  }
+}
+/** 玩家視角：這艘船可以打嗎（海警要有通緝或被惹毛才打） */
+function crewMayAttack(W, o) { return hostile(0, o.team) && (o.team !== 3 || W.wanted >= 0.5 || o.angry); }
+function crewTargets(W) {
+  const out = [];
+  for (const o of W.npcs) if (o.sink <= 0 && crewMayAttack(W, o)) out.push({ x: o.x, z: o.z, y: 1, ship: o });
+  CASTLES.forEach((C, ci) => { const F = W.forts[ci]; if (F.down || (C.team === 3 && W.wanted < 0.5)) return; C.towersPos.forEach((T, i) => { if (F.hp[i] > 0) out.push({ x: T.x, z: T.z, y: T.y + 6, tower: 1 }); }); });
+  return out;
+}
+const bestSailAng = (S, wind) => { let best = 0, bp = -1; for (let a = -1; a <= 1.001; a += 0.1) { const p = sailPower({ heading: S.heading, sailAng: a }, wind); if (p > bp) { bp = p; best = a; } } return best; };
+function shipLadderWorld(S, side = 1) { const sh = Math.sin(S.heading), ch = Math.cos(S.heading), lx = side * 3.6; return [S.x + ch * lx, S.z - sh * lx]; }
+function stepCrew(W, dt, players) {
+  const S = W.ship, O = W.orders;
+  if (!W.crew.length) return;
+  const sinking = S.sink > 0;
+  const usedCannons = new Set(players.filter(p => typeof p.st === 'number').map(p => p.st));
+  const sailManned = players.some(p => p.st === 'sail');
+  const active = CANNONS.map((c, i) => i).filter(i => i < S.nc && !usedCannons.has(i));
+  let gi = 0;
+  const targets = W.crew.some(c => c.role === 'gunner') ? crewTargets(W) : [];
+  const anchorHands = W.crew.filter(c => c.role === 'anchor' && c.on).length;
+  for (const c of W.crew) {
+    c.cd -= dt; c.mv = 0;
+    if (c.down > 0) { c.down -= dt; if (c.down <= 0) { c.on = 1; c.hp = 100; c.task = ''; c.x = 0; c.y = DECK; c.z = -4; W.events.push({ e: 'msg', t: `${c.name}回到船上了` }); } continue; }
+    if (c.on && c.hp < 100) c.hp = Math.min(100, c.hp + dt * 2);
+    if (sinking && c.on) continue;
+    if (c.role === 'gunner') {
+      const ci = active[gi++]; c.ci = ci ?? -1; if (ci === undefined) { c.task = '待命（沒有空砲位）'; c.x = 0; c.y = DECK; c.z = 3 + gi; continue; }
+      const C0 = CANNONS[ci], cs = S.cannons[ci], side = C0.side;
+      const th0 = (side > 0 ? Math.PI / 2 : -Math.PI / 2) + cs.yaw;
+      c.x = C0.x - Math.sin(th0) * 1.3; c.y = DECK; c.z = C0.z - Math.cos(th0) * 1.3; c.h = th0;
+      if (!O.fire) { c.task = '停火待命'; continue; }
+      const broad = S.heading + (side > 0 ? Math.PI / 2 : -Math.PI / 2), v0 = muzzleV(W, S);
+      let T = null, bd = 300;
+      for (const t of targets) { const d = Math.hypot(t.x - S.x, t.z - S.z); if (d < 35 || d > bd) continue; const off = angDiff(Math.atan2(t.x - S.x, t.z - S.z), broad); if (Math.abs(off) < 0.62) { bd = d; T = t; } }
+      if (!cs.loaded && c.cd <= 0) {
+        const want = T && T.ship && T.ship.sailHP > 0.55 && S.sup.c > 0 && R() < 0.25 ? 'c' : T && T.tower && S.sup.x > 0 && R() < 0.3 ? 'x' : 'n';
+        const k = S.sup[want] > 0 ? want : S.sup.n > 0 ? 'n' : null;
+        if (k) { S.sup[k]--; cs.loaded = k; c.cd = 1.2; W.events.push({ e: 'loaded', i: ci }); c.task = '裝填中'; } else c.task = '沒砲彈了！';
+      }
+      if (!T) { if (cs.loaded) c.task = '已裝填，等目標'; cs.yaw += (0 - cs.yaw) * Math.min(1, dt); continue; }
+      let tx = T.x, tz = T.z;
+      if (T.ship) { const [vx, vz] = shipVel(T.ship), fl = bd / (v0 * 0.85); tx += vx * fl; tz += vz * fl; }
+      const yawW = Math.max(-0.68, Math.min(0.68, angDiff(Math.atan2(tx - S.x, tz - S.z), broad)));
+      const pitchW = solvePitch(Math.hypot(tx - S.x, tz - S.z), (T.y || 1) - 3, v0) + (c.err ?? (c.err = (R() - 0.5) * 0.04));
+      cs.yaw += (yawW - cs.yaw) * Math.min(1, dt * 3); cs.pitch += (pitchW - cs.pitch) * Math.min(1, dt * 3);
+      c.task = T.tower ? '瞄準城堡砲塔' : `瞄準${KINDS[T.ship.kind].name}`;
+      if (cs.loaded && c.cd <= 0 && Math.abs(cs.yaw - yawW) < 0.03 && Math.abs(cs.pitch - pitchW) < 0.02) { const a = cs.loaded; cs.loaded = 0; fire(W, S, ci, a); c.cd = 4 + R() * 2; c.err = undefined; }
+    } else if (c.role === 'sailor') {
+      c.x = 0.9; c.y = DECK; c.z = -1.6; c.h = 0;
+      if (O.sail != null) { S.sail += (O.sail - S.sail) * Math.min(1, dt * 0.5); if (O.sail > 0 && S.anchor > 0.5 && S.anchorDir === 0 && anchorHands) S.anchorDir = -1; }
+      if (!sailManned) { const b = bestSailAng(S, W.wind); S.sailAng += Math.max(-dt * 0.5, Math.min(dt * 0.5, b - S.sailAng)); }
+      c.task = sailManned ? '協助調帆' : `調帆吃風 ${Math.round((S._power || 0) * 100)}%`;
+    } else if (c.role === 'anchor') {
+      c.x = 0.8; c.y = DECK; c.z = 7.6; c.h = 0;
+      if (S.anchorDir < 0) S.anchor = Math.max(0, S.anchor - dt * 0.22);   // 錨手幫忙：起錨快一倍
+      c.task = S.anchorDir < 0 ? '起錨中' : S.anchorDir > 0 ? '下錨中' : S.anchor > 0.5 ? '錨已下' : '錨已起';
+    } else if (c.role === 'carpenter') {
+      const fire0 = S.fires[0], hole = S.holes[0];
+      if (fire0) { c.x = fire0.x + 0.8; c.y = DECK; c.z = fire0.z; c.task = '滅火中'; if (c.cd <= 0) { fire0.i -= 0.45; c.cd = 3; W.events.push({ e: 'doused', x: S.x, y: 3, z: S.z, crew: 1 }); S.fires = S.fires.filter(f => f.i > 0); } }
+      else if (hole && S.sup.p > 0) { c.x = hole.x * 0.8; c.y = HOLD; c.z = hole.z; c.task = '補洞中'; if (c.cd <= 0) { S.holes.shift(); S.sup.p--; c.cd = 6; W.events.push({ e: 'repaired', pid: 'crew' }); } }
+      else if (S.water > 0.04) { c.x = 0; c.y = HOLD; c.z = -2; c.task = '舀水中'; if (c.cd <= 0) { S.water = Math.max(0, S.water - 0.035); c.cd = 2.5; } }
+      else { c.x = -1.2; c.y = HOLD; c.z = -5; c.task = hole ? '沒木板了！' : '待命'; }
+    } else if (c.role === 'marine') stepMarine(W, c, dt);
+  }
+}
+function nearestLand(x, z) {   // 從 (x,z) 往最近的島走，找上岸點
+  let I = null, bd = 1e9; for (const J of ISLANDS) { if (!J.name && !J.berg) continue; const d = Math.hypot(J.x - x, J.z - z) - J.r; if (d < bd) { bd = d; I = J; } }
+  if (!I) return null;
+  const a = Math.atan2(I.z - z, I.x - x);
+  for (let d = 0; d < 400; d += 2) { const px = x + Math.cos(a) * d, pz = z + Math.sin(a) * d; if (terrainH(px, pz) > 1.2) return { I, x: px, z: pz, d }; }
+  return null;
+}
+function stepMarine(W, c, dt) {
+  const S = W.ship, O = W.orders.marines;
+  const ashore = !c.on;
+  if (c.on) {
+    c.x = -0.8 + (c.id % 3) * 0.8; c.y = DECK; c.z = 2.5 - (c.id % 4) * 1.2; c.h = 0;
+    if ((O === 'raid' || O === 'dig') && S.anchor > 0.5 && S.sink <= 0) {
+      const L = nearestLand(S.x, S.z);
+      if (L && L.d < 170) { const [lx, lz] = shipLadderWorld(S, c.id % 2 ? 1 : -1); c.on = 0; c.x = lx; c.z = lz; c.y = waveHeight(lx, lz, W.t) - 1.2; c.isl = L.I.id; c.land = [L.x + (R() - 0.5) * 6, L.z + (R() - 0.5) * 6]; c.task = '划向岸邊'; W.events.push({ e: 'splashm', x: lx, z: lz }); }
+      else c.task = '船要下錨停在島邊（170 公尺內）才能上岸';
+    } else c.task = O === 'stay' ? '在船上待命' : '等船下錨';
+    return;
+  }
+  // 起錨開走：陸戰隊自己划回船上
+  if (S.anchor < 0.3 || O === 'back' || O === 'stay') {
+    const [lx, lz] = shipLadderWorld(S, 1), d = Math.hypot(lx - c.x, lz - c.z);
+    if (d < 3 || S.anchor < 0.3 && d > 260) {
+      if (c.carry) { const t = W.treasures.find(t => t.id === c.carry); if (t) { if (d < 3) { t.st = 'ship'; t.carrier = null; t.lx = (R() - 0.5) * 3; t.ly = DECK; t.lz = -4 + R() * 6; W.events.push({ e: 'msg', t: `📦 ${c.name}把${TIER[t.tier].name}搬上船了！` }); } else { t.st = 'float'; t.carrier = null; t.x = c.x; t.z = c.z; } } c.carry = 0; }
+      c.on = 1; c.task = ''; return;
+    }
+    moveMarine(W, c, lx, lz, dt); c.task = c.carry ? '扛寶箱回船' : '回船中'; return;
+  }
+  // 附近有敵人就先打
+  let foe = null, fd = O === 'raid' ? 90 : 9;
+  for (const g of W.guards) { const d = Math.hypot(g.x - c.x, g.z - c.z); if (d < fd) { fd = d; foe = { g }; } }
+  for (const k of W.crabs) { const d = Math.hypot(k.x - c.x, k.z - c.z); if (d < fd) { fd = d; foe = { k }; } }
+  if (foe && !c.carry) {
+    const o = foe.g || foe.k;
+    if (fd > 1.8) { moveMarine(W, c, o.x, o.z, dt); c.task = '衝鋒！'; }
+    else { c.h = Math.atan2(o.x - c.x, o.z - c.z); c.task = '交戰中'; if (c.cd <= 0) { c.cd = 1.1; W.events.push({ e: 'mswing', id: c.id }); const dmg = 1.4 + 0.3 * W.up.sword; if (foe.g) damageGuard(W, o, dmg); else { o.hp -= dmg; W.events.push({ e: 'crabhit', id: o.id, x: o.x, z: o.z }); if (o.hp <= 0) W.crabs = W.crabs.filter(x => x !== o); } } }
+    return;
+  }
+  if (O === 'dig' || O === 'raid') {
+    if (c.carry) { const [lx, lz] = shipLadderWorld(S, 1); if (Math.hypot(lx - c.x, lz - c.z) < 3) { const t = W.treasures.find(t => t.id === c.carry); if (t) { t.st = 'ship'; t.carrier = null; t.lx = (R() - 0.5) * 3; t.ly = DECK; t.lz = -4 + R() * 6; W.events.push({ e: 'msg', t: `📦 ${c.name}把${TIER[t.tier].name}搬上船了！` }); } c.carry = 0; } else moveMarine(W, c, lx, lz, dt); c.task = '扛寶箱回船'; return; }
+    // 撿地上的寶箱（金庫、挖出來的）
+    let tgt = null, td = 260;
+    for (const t of W.treasures) if (t.st === 'ground' && t.carrier == null && !W.crew.some(o => o !== c && o.goal === t.id)) { const d = Math.hypot(t.x - c.x, t.z - c.z); if (d < td) { td = d; tgt = t; } }
+    if (!tgt && O === 'dig') for (const id of W.quests) { const t = W.treasures.find(x => x.id === id && x.st === 'buried'); if (t && Math.hypot(t.x - c.x, t.z - c.z) < 300 && !W.crew.some(o => o !== c && o.goal === t.id)) { tgt = t; td = Math.hypot(t.x - c.x, t.z - c.z); break; } }
+    c.goal = tgt ? tgt.id : 0;
+    if (!tgt && O === 'raid') {   // 沒看到敵人：先登陸，再往島上的城堡推進
+      const I = ISLANDS[c.isl], C = I && I.castle !== undefined ? CASTLES.find(K => K.isl === I.id) : null;
+      const onLand = terrainH(c.x, c.z) > 0.8;
+      const gx = C && onLand ? C.x + Math.cos(c.id) * 10 : c.land ? c.land[0] : c.x, gz = C && onLand ? C.z + Math.sin(c.id) * 10 : c.land ? c.land[1] : c.z;
+      if (Math.hypot(gx - c.x, gz - c.z) > 2) { moveMarine(W, c, gx, gz, dt); c.task = onLand ? (C ? '向城堡推進' : '登陸') : '划向岸邊'; } else c.task = '守在岸上';
+      return;
+    }
+    if (!tgt) { c.task = O === 'dig' ? '附近沒有寶藏了，回船' : '守在岸上'; if (O === 'dig') { const [lx, lz] = shipLadderWorld(S, 1); moveMarine(W, c, lx, lz, dt); if (Math.hypot(lx - c.x, lz - c.z) < 3) c.on = 1; } return; }
+    if (td > 1.6) { moveMarine(W, c, tgt.x, tgt.z, dt); c.task = tgt.st === 'buried' ? '前往藏寶點' : '去搬寶箱'; return; }
+    if (tgt.st === 'buried') {
+      c.task = '挖寶中'; c.dig = (c.dig || 0) + dt;
+      if (c.dig > 1 && R() < dt * 2) W.events.push({ e: 'mdig', x: c.x, z: c.z });
+      if (c.dig > 9) { c.dig = 0; act(W, 'crew', { a: 'dig', tid: tgt.id }, []); W.events.push({ e: 'msg', t: `⛏ ${c.name}挖到${TIER[tgt.tier].name}了！` }); }
+      return;
+    }
+    tgt.st = 'carry'; tgt.carrier = 'm' + c.id; c.carry = tgt.id; c.goal = 0;
+  }
+}
+function moveMarine(W, c, tx, tz, dt) {
+  const a = Math.atan2(tx - c.x, tz - c.z), g = terrainH(c.x, c.z), wh = waveHeight(c.x, c.z, W.t), swim = g < wh - 1.2;
+  const sp = (swim ? 3.2 : 4.3) * (c.carry ? 0.75 : 1), d = Math.hypot(tx - c.x, tz - c.z), step = Math.min(d, sp * dt);
+  c.x += Math.sin(a) * step; c.z += Math.cos(a) * step; c.h = a; c.mv = 1;
+  const g2 = terrainH(c.x, c.z), w2 = waveHeight(c.x, c.z, W.t); c.y = g2 < w2 - 1.2 ? w2 - 1.3 : g2;
 }
 
 // ---------- 玩家動作（房主收到後執行）----------
@@ -641,6 +807,22 @@ export function act(W, pid, m, players) {
       W.gold -= cost; W.up[k]++; if (k === 'guns') S.nc = 4 + 2 * W.up.guns;
       ev({ e: 'msg', t: k === 'gun' && W.up.gun === 1 ? '🔫 買下了火槍！按 7 拿出來，左鍵射擊' : `🔧 強化完成：${UPS[k].name} Lv.${W.up[k]}${k === 'guns' ? `（現在有 ${S.nc} 門砲）` : ''}` }); ev({ e: 'coin' }); break;
     }
+    case 'hire': {
+      const R0 = ROLES[m.role]; if (!R0) break;
+      if (W.crew.length >= MAX_CREW) { ev({ e: 'msg', pid, t: `船上最多 ${MAX_CREW} 名船員` }); break; }
+      if (!nearPort()) { ev({ e: 'msg', pid, t: '船要停在港口附近才能招募船員' }); break; }
+      if (W.gold < R0.cost) { ev({ e: 'msg', pid, t: `金幣不夠（雇用${R0.name}要 ${R0.cost} 金）` }); break; }
+      W.gold -= R0.cost; const c = hireCrew(W, m.role); ev({ e: 'msg', t: `🧑‍✈️ 雇用了${R0.name}「${c.name}」！按 C 打開船員面板下命令` }, { e: 'coin' }); break;
+    }
+    case 'dismiss': { const c = W.crew.find(c => c.id === m.id); if (!c) break; if (c.carry) { const t = W.treasures.find(t => t.id === c.carry); if (t) { t.carrier = null; t.st = 'ground'; t.x = c.x; t.z = c.z; t.y = terrainH(c.x, c.z); } } W.crew = W.crew.filter(x => x !== c); ev({ e: 'msg', t: `${ROLES[c.role].name}「${c.name}」下船了` }); break; }
+    case 'order': {
+      const O = W.orders;
+      if (m.k === 'fire') { O.fire = m.v ? 1 : 0; ev({ e: 'msg', t: O.fire ? '📣 砲手：自由開火！' : '📣 砲手：停火！' }); }
+      if (m.k === 'sail') { O.sail = m.v == null ? null : Math.max(0, Math.min(1, +m.v)); ev({ e: 'msg', t: O.sail == null ? '📣 帆手：聽船長自己調帆' : O.sail >= 1 ? '📣 帆手：全帆前進！' : O.sail > 0 ? '📣 帆手：半帆！' : '📣 帆手：收帆！' }); }
+      if (m.k === 'anchor') { if (S.sink <= 0) { S.anchorDir = m.v ? 1 : -1; ev({ e: 'msg', t: m.v ? '📣 錨手：下錨！' : '📣 錨手：起錨！' }); } }
+      if (m.k === 'marines') { O.marines = ['stay', 'raid', 'dig', 'back'].includes(m.v) ? m.v : 'stay'; ev({ e: 'msg', t: { stay: '📣 陸戰隊：留在船上', raid: '📣 陸戰隊：上岸攻城！', dig: '📣 陸戰隊：上岸挖寶、搬寶箱！', back: '📣 陸戰隊：全員回船！' }[O.marines] }); }
+      break;
+    }
     case 'melee': case 'shoot': case 'hitcrab': {
       if (m.a === 'shoot' && Array.isArray(m.p) && Array.isArray(m.q) && W.up.gun) ev({ e: 'pshot', pid, p: m.p, q: m.q });
       const kind = m.k || 'c', dmg = m.a === 'shoot' ? (W.up.gun ? gunDmg(W) : 0) : swordDmg(W); if (!dmg || kind === 'x') break;
@@ -681,7 +863,8 @@ export function pack(W) {
   return {
     t: r2(W.t), g: W.gold, wd: [r3(W.wind.a), r2(W.wind.s)], am: r2(W.amp), dy: r3(W.day), so: r2(W.storm.on), sx: r1(W.storm.x), sz: r1(W.storm.z), sr: W.storm.r,
     s: packShip(W.ship), np: W.npcs.map(packShip), q: W.quests, up: W.up, bo: W.bounty, fl: W.fleet ? W.fleet.ids : 0, wa: r2(W.wanted),
-    fo: W.forts.map(F => [F.hp.map(r1), F.down, F.open]),
+    fo: W.forts.map(F => [F.hp.map(r1), F.down, F.open]), od: W.orders,
+    cw: W.crew.map(c => [c.id, c.role, c.name, c.on, r2(c.x), r2(c.y), r2(c.z), Math.round(c.hp), c.task || '', c.ci ?? -1, c.down > 0 ? 1 : 0, r2(c.h || 0), c.mv ? 1 : 0, c.carry || 0]),
     gu: W.guards.map(g => [g.id, g.f, r2(g.x), r2(g.z), r2(g.h), r1(g.hp), g.max, g.k, g.mv]),
     tr: W.treasures.map(t => [t.id, t.tier, t.st, r2(t.x), r2(t.y), r2(t.z), t.carrier, t.isl ?? -1, r2(t.lx || 0), r2(t.ly || 0), r2(t.lz || 0)]),
     cr: W.crabs.map(c => [c.id, r2(c.x), r2(c.z), r2(c.h), c.hp, c.mv]),
@@ -693,6 +876,7 @@ export function unpack(W, o) {
   W.npcs = o.np.map(e => unpackShip(e, W.npcs.find(x => x.id === e.id)));
   W.quests = o.q; W.up = o.up; W.bounty = o.bo; W.fleet = o.fl ? { ids: o.fl } : null; W.wanted = o.wa;
   W.forts = o.fo.map((a, i) => ({ ...(W.forts[i] || {}), hp: a[0], down: a[1], open: a[2] }));
+  W.orders = o.od; W.crew = o.cw.map(a => ({ id: a[0], role: a[1], name: a[2], on: a[3], x: a[4], y: a[5], z: a[6], hp: a[7], task: a[8], ci: a[9], down: a[10], h: a[11], mv: a[12], carry: a[13] }));
   W.guards = o.gu.map(a => ({ id: a[0], f: a[1], x: a[2], z: a[3], h: a[4], hp: a[5], max: a[6], k: a[7], mv: a[8] }));
   W.treasures = o.tr.map(a => ({ id: a[0], tier: a[1], st: a[2], x: a[3], y: a[4], z: a[5], carrier: a[6], isl: a[7] < 0 ? undefined : a[7], lx: a[8], ly: a[9], lz: a[10] }));
   W.crabs = o.cr.map(a => ({ id: a[0], x: a[1], z: a[2], h: a[3], hp: a[4], mv: a[5] }));
