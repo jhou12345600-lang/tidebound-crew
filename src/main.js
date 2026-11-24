@@ -2,14 +2,15 @@
 import * as THREE from 'three';
 import { createWorld } from './world.js';
 import { buildShip, buildChest, buildPerson } from './shipmesh.js';
-import { newWorld, step, act, pack, unpack, smoothShips, shipPose, cannonMuzzle, shipVel, TIER, ballStep, muzzleV, allShips, AMMO, AMMO_KEYS, KINDS, waterlineLocal } from './sim.js';
+import { newWorld, step, act, pack, unpack, smoothShips, shipPose, cannonMuzzle, shipVel, TIER, ballStep, muzzleV, allShips, AMMO, AMMO_KEYS, KINDS, waterlineLocal, maxHP, gunReload } from './sim.js';
 import { createFX } from './fx.js';
 import { sea, waveHeight } from './waves.js';
-import { ISLANDS, terrainH, groundH, MERCHANT, WORLD_R, nearestIsland } from './geo.js';
+import { ISLANDS, terrainH, groundH, MERCHANT, MERCHANTS, WORLD_R, nearestIsland, CASTLES, seaAt } from './geo.js';
 import { DECK, HOLD, STATIONS, CANNONS, CRATES, LADDERS, MAST, shipFloor, shipClamp, holdW, deckW } from './shipdef.js';
 import { MqttNet, LocalNet } from './net.js';
 import { initAudio, ambient, sfx } from './audio.js';
-import { initUI, ui, toast, chatLine, drawMap, drawTreasureMap, openShop, closeAll, anyOverlay, updateHotbar } from './ui.js';
+import { Accounts, keyOf } from './account.js';
+import { initUI, renderFriends, setKeyOf, ui, toast, chatLine, drawMap, drawTreasureMap, openShop, closeAll, anyOverlay, updateHotbar } from './ui.js';
 
 const $ = id => document.getElementById(id);
 const world = createWorld($('cv'));
@@ -67,8 +68,11 @@ const heldItems = (() => {
   const bucket = mk(); const bk = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.11, 0.24, 12, 1, true), wood); bk.material = wood.clone(); bk.material.side = THREE.DoubleSide; bucket.add(bk); const bw = new THREE.Mesh(new THREE.CircleGeometry(0.13, 12).rotateX(-Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x2a7a8a, roughness: 0.1 })); bw.position.y = 0.08; bucket.add(bw); bucket.userData.w = bw; bucket.position.y = -0.05;
   const map = new THREE.Mesh(new THREE.PlaneGeometry(0.36, 0.28), new THREE.MeshStandardMaterial({ color: 0xe8d6a0, side: THREE.DoubleSide })); map.position.set(-0.25, 0.05, 0.05); map.rotation.set(-0.6, 0.3, 0);
   const glass = mk(); const g1 = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.045, 0.4, 10).rotateX(Math.PI / 2), brass); glass.add(g1); glass.rotation.set(0.1, 0.2, 0);
+  const gun = mk(); const gb = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.028, 0.62, 8).rotateX(Math.PI / 2).translate(0, 0.05, -0.2), new THREE.MeshStandardMaterial({ color: 0x2a2a2c, metalness: 0.6, roughness: 0.4 })); gun.add(gb);
+  const stock = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.14, 0.34).translate(0, -0.02, 0.18), wood); stock.rotation.x = 0.25; gun.add(stock);
+  const lock = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, 0.08), brass); lock.position.set(0.03, 0.08, 0.02); gun.add(lock); gun.rotation.set(0.05, 0.08, 0);
   const chest = buildChest(1); chest.scale.setScalar(0.7); chest.position.set(-0.32, -0.15, -0.35);
-  return [sword, shovel, plank, bucket, map, glass, chest].map(o => { held.add(o); o.visible = false; return o; });
+  return [sword, shovel, plank, bucket, map, glass, gun, chest].map(o => { held.add(o); o.visible = false; return o; });
 })();
 let swingT = 0;
 
@@ -173,9 +177,30 @@ function handleEvent(e) {
     case 'bump': sfx.hit(dist(e.x, e.z)); FX.explosion(e.x, 1, e.z, 'n', 0.5); if (e.s === 0 && me.onShip) { shake = 0.6; toast('💥 撞到礁石了！船身破洞！', 1); } break;
     case 'ram': sfx.hit(dist(e.x, e.z)); sfx.crumble(dist(e.x, e.z) + 80); FX.explosion(e.x, 2, e.z, 'n', 0.8); if (e.s.includes(0) && me.onShip) { shake = 1; toast('💥 兩艘船撞在一起了！', 1); } break;
     case 'crabhit': FX.dirt(e.x, terrainH(e.x, e.z) + 0.8, e.z, 0.3); break;
+    case 'shot': { const a = new THREE.Vector3(e.x, e.y, e.z), b = new THREE.Vector3(e.tx, e.ty, e.tz); FX.gunshot(a, b, false); sfx.gunshot(dist(e.x, e.z)); break; }
+    case 'pshot': if (e.pid !== myId) { FX.gunshot(new THREE.Vector3().fromArray(e.p), new THREE.Vector3().fromArray(e.q), false); sfx.gunshot(dist(e.p[0], e.p[2])); } break;
+    case 'gswing': sfx.swing(); break;
+    case 'ghit': FX.blood(e.x, terrainH(e.x, e.z) + 1.1, e.z); break;
+    case 'gdown': { FX.blood(e.x, terrainH(e.x, e.z) + 0.8, e.z, 2); FX.dirt(e.x, terrainH(e.x, e.z) + 0.3, e.z, 0.4); if (dist(e.x, e.z) < 80) toast(`⚔ 擊倒守軍！+${e.g} 金`); break; }
+    case 'sea': showSea(e.n); break;
   }
 }
 const ruinSmoke = [];
+function showSea(n) { const el = $('seaName'); el.textContent = n; el.classList.remove('show'); void el.offsetWidth; el.classList.add('show'); sfx.chime(); }
+// 守軍模型
+const guardMeshes = new Map();
+const GUARD_COL = { shark: [0x2b2b2b, 0x7a1717], frost: [0x9fc4d8, 0x3d5566], navy: [0x1f4f8c, 0xe8ecef], red: [0x8c1f14, 0x2a1410], mist: [0x5f6b66, 0x2b3230] };
+function guardMesh(g) {
+  const C = CASTLES[g.f], [c1, c2] = GUARD_COL[C.faction] || GUARD_COL.shark;
+  const m = buildPerson(c1, c2);
+  const steel = new THREE.MeshStandardMaterial({ color: 0xd5dbe2, metalness: 0.3, roughness: 0.4 }), wood = new THREE.MeshStandardMaterial({ color: 0x5a3a22 });
+  const arm = m.userData.arms[1];
+  if (g.k === 's') { const bl = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.9, 0.02), steel); bl.position.set(0, -0.95, 0.3); bl.rotation.x = 1.2; arm.add(bl); const sh = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.32, 0.06, 12).rotateZ(Math.PI / 2), new THREE.MeshStandardMaterial({ color: c2 })); sh.position.set(-0.45, 1.15, 0.15); m.add(sh); }
+  else { const gun = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.035, 1.3, 6).rotateX(Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x2a2a2c })); gun.position.set(0.15, 1.25, 0.45); m.add(gun); const st = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.12, 0.4), wood); st.position.set(0.15, 1.2, -0.1); m.add(st); }
+  // 血條
+  const bar = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.09), new THREE.MeshBasicMaterial({ color: 0xd03a2a, depthTest: false, transparent: true })); bar.position.y = 2.3; bar.renderOrder = 6; m.add(bar); m.userData.bar = bar;
+  return m;
+}
 function killBall(id) { const b = ballVis.get(id); if (b) { scene.remove(b.m); ballVis.delete(id); } }
 
 // ---------- 玩家 ----------
@@ -193,7 +218,7 @@ function boardShip(L) {
 }
 function die() { me.dead = 6; me.hp = 0; me.station = null; if (me.carry) { dropCarry(); } $('dead').classList.remove('hidden'); }
 function respawn() {
-  me.dead = 0; me.hp = 100; $('dead').classList.add('hidden');
+  me.dead = 0; me.hp = maxHP(W); $('dead').classList.add('hidden');
   if (W.ship.sink <= 0) { me.onShip = true; me.lp.set(0, DECK, -6); }
   else { me.onShip = false; me.wp.set(MERCHANT.x, MERCHANT.y, MERCHANT.z + 6); }
   me.v.set(0, 0, 0); reparentCam();
@@ -240,7 +265,7 @@ function findTarget() {
   }
   if (!me.onShip) {
     for (const Ld of LADDERS) consider(L(Ld.x, DECK - 1.2, Ld.z), 3.2, { k: 'ladder', L: Ld, t: '爬上船' });
-    consider(new THREE.Vector3(MERCHANT.x + 2.5, MERCHANT.y + 1.5, MERCHANT.z + 0.2), 4.5, { k: 'shop', t: me.carry ? '賣出寶箱' : '和收購商阿海說話' });
+    for (const M of MERCHANTS) consider(new THREE.Vector3(M.x + 2.5, M.y + 1.5, M.z + 0.2), 4.5, { k: 'shop', t: me.carry ? '賣出寶箱' : `和${M.name}的收購商說話（賣寶、強化、補給）` });
   }
   return best;
 }
@@ -259,13 +284,15 @@ function interact(tg) {
 }
 function openShopMenu() {
   if (document.pointerLockElement) document.exitPointerLock();
+  const cp = myPos(); let M = MERCHANTS[0], bd = 1e9; for (const m of MERCHANTS) { const d = Math.hypot(m.x - cp.x, m.z - cp.z); if (d < bd) { bd = d; M = m; } }
   openShop(W, {
     quest: () => doAct({ a: 'quest' }),
     restock: () => doAct({ a: 'restock' }),
     buyx: () => doAct({ a: 'buyx' }),
     bounty: () => doAct({ a: 'bounty' }),
+    pardon: () => doAct({ a: 'pardon' }),
     upgrade: k => doAct({ a: 'upgrade', k }),
-  });
+  }, M.name);
 }
 
 // ---------- 輸入 ----------
@@ -278,11 +305,12 @@ addEventListener('keydown', e => {
   }
   keys[e.code] = true;
   if (e.code === 'Enter' && net) { e.preventDefault(); $('chatIn').classList.remove('hidden'); $('chatIn').focus(); document.exitPointerLock?.(); return; }
+  if (e.code === 'KeyF') { const o = $('frOv'); o.classList.toggle('hidden'); if (!o.classList.contains('hidden')) { document.exitPointerLock?.(); renderFriends($('friendList2'), acc, ui_h, true); } }
   if (e.code === 'KeyH') { $('helpOv').classList.toggle('hidden'); if (!$('helpOv').classList.contains('hidden')) document.exitPointerLock?.(); }
   if (e.code === 'KeyM') { const o = $('mapOv'); o.classList.toggle('hidden'); if (!o.classList.contains('hidden')) drawMap(W, me, myPos(), remotes); }
   if (e.code === 'Escape') closeAll();
   if (anyOverlay()) return;
-  if (e.code.startsWith('Digit')) { const n = +e.code.slice(5) - 1; if (n >= 0 && n < 6 && !me.carry) { me.item = n; sfx.thunk(); } }
+  if (e.code.startsWith('Digit')) { const n = +e.code.slice(5) - 1; if (n >= 0 && n < 7 && !me.carry) { me.item = n; sfx.thunk(); if (n === 6 && !W.up.gun) toast('還沒有火槍：到任何港口找收購商「強化」買一把'); } }
   if (e.code === 'KeyE') {
     if (me.station) { me.station = null; return; }
     interact(findTarget());
@@ -306,7 +334,7 @@ addEventListener('mousedown', e => {
 addEventListener('mouseup', e => { if (e.button === 0) mouseDown = false; if (e.button === 2) me.zoom = false; });
 addEventListener('contextmenu', e => e.preventDefault());
 function cycleAmmo() { const have = AMMO_KEYS.filter(k => me.inv[k] > 0); if (!have.length) { toast('身上沒有彈藥'); return; } const i = have.indexOf(me.ammo); me.ammo = have[(i + 1) % have.length]; sfx.thunk(); }
-addEventListener('wheel', e => { if (!started || !locked || me.carry) return; if (me.station && me.station.cannon !== undefined) { cycleAmmo(); return; } if (me.station) return; me.item = (me.item + (e.deltaY > 0 ? 1 : 5)) % 6; });
+addEventListener('wheel', e => { if (!started || !locked || me.carry) return; if (me.station && me.station.cannon !== undefined) { cycleAmmo(); return; } if (me.station) return; me.item = (me.item + (e.deltaY > 0 ? 1 : 6)) % 7; });
 document.addEventListener('pointerlockchange', () => { locked = document.pointerLockElement === $('cv'); $('pause').classList.toggle('hidden', locked || !started || anyOverlay()); });
 addEventListener('mousemove', e => {
   if (!locked) return;
@@ -325,7 +353,7 @@ let netT = 0, aimT = 0, stationSend = 0;
 function updatePlayer(dt) {
   me.useCD = Math.max(0, me.useCD - dt);
   if (me.dead > 0) { me.dead -= dt; $('deadT').textContent = Math.ceil(me.dead); if (me.dead <= 0) respawn(); }
-  if (me.hp > 0 && me.hp < 100) me.hp = Math.min(100, me.hp + dt * 2.5);
+  const MX = maxHP(W); if (me.hp > 0 && me.hp < MX) me.hp = Math.min(MX, me.hp + dt * 2.5); me.gunOwned = W.up.gun > 0;
   const S = W.ship;
   if (me.onShip && S.sink > 1.2) { goOverboard(); toast('你掉進海裡了！游到岸邊或等新船', 1); }
   const typing = document.activeElement === $('chatIn');
@@ -421,7 +449,7 @@ function updatePlayer(dt) {
   if (!me.onShip) { const cpos = myPos(); $('under').style.opacity = cpos.y < waveHeight(cpos.x, cpos.z) - 0.05 ? 1 : 0; } else $('under').style.opacity = 0;
 
   // ----- 手上的道具 -----
-  heldItems.forEach((o, i) => o.visible = !me.station && me.dead <= 0 && (me.carry ? i === 6 : i === me.item));
+  heldItems.forEach((o, i) => o.visible = !me.station && me.dead <= 0 && (me.carry ? i === 7 : i === me.item));
   heldItems[3].userData.w.visible = !!me.bucket;
   swingT = Math.max(0, swingT - dt * 3);
   const bob = Math.sin(performance.now() / 160) * Math.min(1, Math.hypot(me.v.x, me.v.z) / 4) * 0.015;
@@ -452,7 +480,9 @@ function useItem(tg, dt) {
     case 0: { // 劍
       me.useCD = 0.45; swingT = 1; sfx.swing();
       const eye = myPos(), dir = camera.getWorldDirection(new THREE.Vector3());
-      for (const c of W.crabs) { const v = new THREE.Vector3(c.x, terrainH(c.x, c.z) + 0.7, c.z).sub(eye); if (v.length() < 3.2 && v.normalize().dot(dir) > 0.45) { doAct({ a: 'hitcrab', id: c.id }); sfx.hit(0); break; } }
+      let done = false;
+      for (const g of W.guards) { const v = new THREE.Vector3(g.x, terrainH(g.x, g.z) + 1.1, g.z).sub(eye); if (v.length() < 3.4 && v.normalize().dot(dir) > 0.45) { doAct({ a: 'melee', k: 'g', id: g.id }); sfx.hit(0); done = true; break; } }
+      if (!done) for (const c of W.crabs) { const v = new THREE.Vector3(c.x, terrainH(c.x, c.z) + 0.7, c.z).sub(eye); if (v.length() < 3.2 && v.normalize().dot(dir) > 0.45) { doAct({ a: 'melee', k: 'c', id: c.id }); sfx.hit(0); break; } }
       break;
     }
     case 1: { // 鏟子
@@ -491,6 +521,21 @@ function useItem(tg, dt) {
     }
     case 4: break;
     case 5: break;
+    case 6: { // 火槍
+      if (!W.up.gun) { me.useCD = 0.6; toast('還沒有火槍：到港口找收購商「強化 → 火槍」購買'); break; }
+      me.useCD = gunReload(W); swingT = 0.6;
+      const eye = myPos(), dir = camera.getWorldDirection(new THREE.Vector3());
+      let best = null, bt = 70;
+      const test = (x, y, z, rad, o) => { const v = new THREE.Vector3(x, y, z).sub(eye), t = v.dot(dir); if (t < 0 || t > bt) return; const perp = v.clone().addScaledVector(dir, -t).length(); if (perp < rad) { bt = t; best = o; } };
+      for (const g of W.guards) test(g.x, terrainH(g.x, g.z) + 1.1, g.z, 0.75, { k: 'g', id: g.id });
+      for (const c of W.crabs) test(c.x, terrainH(c.x, c.z) + 0.7, c.z, 0.9, { k: 'c', id: c.id });
+      const end = eye.clone().addScaledVector(dir, bt);
+      const muzzle = eye.clone().addScaledVector(dir, 0.6).add(new THREE.Vector3(0, -0.12, 0));
+      FX.gunshot(muzzle, end, true); sfx.gunshot(0);
+      doAct({ a: 'shoot', k: best ? best.k : 'x', id: best ? best.id : -1, p: muzzle.toArray().map(n => +n.toFixed(2)), q: end.toArray().map(n => +n.toFixed(2)) });
+      shake = Math.max(shake, 0.15);
+      break;
+    }
   }
 }
 
@@ -543,7 +588,7 @@ function syncEntities(dt) {
   for (const [id, m] of treasureMeshes) if (!tSeen.has(id)) { m.parent?.remove(m); treasureMeshes.delete(id); }
   if (me.carry && !W.treasures.some(t => t.id === me.carry && t.carrier === myId) && (isHost || performance.now() - (me.carryT || 0) > 1600)) me.carry = null;
   if (me.carry && !W.treasures.some(t => t.id === me.carry)) me.carry = null;
-  if (me.carry) { const tr = W.treasures.find(t => t.id === me.carry); if (tr) { const ch = heldItems[6]; if (ch.userData.tier !== tr.tier) { held.remove(ch); heldItems[6] = buildChest(tr.tier); heldItems[6].scale.setScalar(0.7); heldItems[6].position.set(-0.32, -0.15, -0.35); heldItems[6].userData.tier = tr.tier; held.add(heldItems[6]); } } }
+  if (me.carry) { const tr = W.treasures.find(t => t.id === me.carry); if (tr) { const ch = heldItems[7]; if (ch.userData.tier !== tr.tier) { held.remove(ch); heldItems[7] = buildChest(tr.tier); heldItems[7].scale.setScalar(0.7); heldItems[7].position.set(-0.32, -0.15, -0.35); heldItems[7].userData.tier = tr.tier; held.add(heldItems[7]); } } }
   // 礁石蟹
   const cSeen = new Set();
   for (const c of W.crabs) {
@@ -551,6 +596,18 @@ function syncEntities(dt) {
     m.position.x += (c.x - m.position.x) * Math.min(1, dt * 8); m.position.z += (c.z - m.position.z) * Math.min(1, dt * 8); m.position.y = terrainH(m.position.x, m.position.z) + (c.mv ? Math.abs(Math.sin(t * 14)) * 0.08 : 0);
     m.rotation.y = c.h;
   }
+  const gSeen = new Set();
+  for (const g of W.guards) {
+    if (Math.hypot(g.x - cpos.x, g.z - cpos.z) > 450) continue;
+    gSeen.add(g.id); let m = guardMeshes.get(g.id); if (!m) { m = guardMesh(g); scene.add(m); guardMeshes.set(g.id, m); m.position.set(g.x, terrainH(g.x, g.z), g.z); }
+    const px = m.position.x, pz = m.position.z;
+    m.position.x += (g.x - px) * Math.min(1, dt * 8); m.position.z += (g.z - pz) * Math.min(1, dt * 8); m.position.y = terrainH(m.position.x, m.position.z);
+    m.rotation.y = g.h; m.userData.animate(g.mv ? 3.5 : 0, dt);
+    const bar = m.userData.bar; bar.visible = g.hp < g.max; bar.scale.x = Math.max(0.02, g.hp / g.max); bar.quaternion.copy(camera.getWorldQuaternion(new THREE.Quaternion())).premultiply(m.quaternion.clone().invert());
+  }
+  for (const [id, m] of guardMeshes) if (!gSeen.has(id)) { scene.remove(m); guardMeshes.delete(id); }
+  // 火山煙柱
+  for (const v of world.volcanoes) { const d = Math.hypot(v.x - cpos.x, v.z - cpos.z); if (d < 2600) FX.volcano(v.x, v.y, v.z, dt); }
   for (const [id, m] of crabMeshes) if (!cSeen.has(id)) { FX.dirt(m.position.x, m.position.y + 0.6, m.position.z, 0.4); scene.remove(m); crabMeshes.delete(id); }
   // 砲彈
   for (const [id, b] of ballVis) {
@@ -603,11 +660,13 @@ function updateHUD(dt) {
   if (W.fleet) { const left = W.npcs.filter(e => W.fleet.ids.includes(e.id) && e.sink <= 0).length; ev.push(`⚔ 黑鯊艦隊來襲：剩 ${left} 艘`); }
   const allies = W.npcs.filter(e => e.team === 1 && e.sink <= 0).length; if (allies) ev.push(`🛡 海巡隊友軍 ${allies} 艘`);
   if (W.bounty) ev.push(`🎯 懸賞：${W.bounty.done}/${W.bounty.need}（${W.bounty.reward} 金）`);
-  ev.push(W.fort.down ? '🏴 黑鯊要塞：已攻陷' : `🏰 黑鯊要塞（鯨骨礁）：砲塔 ${W.fort.hp.filter(h => h > 0).length}/4`);
+  if (W.wanted >= 0.05) ev.push(`🚨 通緝：<b style="color:#ffcf4a">${'★'.repeat(Math.ceil(W.wanted))}${'☆'.repeat(5 - Math.ceil(W.wanted))}</b>`);
+  { const cp0 = myPos(); let ci = 0, bd = 1e9; CASTLES.forEach((C, i) => { const d = Math.hypot(C.x - cp0.x, C.z - cp0.z); if (d < bd) { bd = d; ci = i; } }); const C = CASTLES[ci], F = W.forts[ci];
+    if (F) { const g = W.guards.filter(x => x.f === ci).length; ev.push(F.open ? `🏴 ${C.name}：已攻陷` : `🏰 ${C.name}：砲塔 ${F.hp.filter(h => h > 0).length}/${F.hp.length}　守軍 ${g}`); } }
   $('events').innerHTML = ev.map(x => `<div>${x}</div>`).join('');
   $('cargoV').textContent = W.treasures.filter(t => t.st === 'ship').length;
   updateHotbar(me); $('invB').textContent = AMMO_KEYS.map(k => me.inv[k] ? `${AMMO[k]}${me.inv[k]}` : '').filter(Boolean).join(' ') || '無'; $('invP').textContent = me.inv.p;
-  $('hpV').textContent = Math.max(0, Math.round(me.hp)); $('hpB').style.width = Math.max(0, me.hp) + '%';
+  $('hpV').textContent = Math.max(0, Math.round(me.hp)); $('hpB').style.width = Math.max(0, me.hp / maxHP(W) * 100) + '%';
   // 羅盤
   const labels = []; for (let d = -360; d <= 720; d += 15) { const n = ((d % 360) + 360) % 360; labels.push(n === 0 ? '<b style="color:#f2c14e">北</b>' : n === 90 ? '<b>東</b>' : n === 180 ? '<b>南</b>' : n === 270 ? '<b>西</b>' : n % 45 === 0 ? '◆' : '·'); }
   // 世界 -z = 北、+x = 東
@@ -645,7 +704,7 @@ function frame(now) {
     const a = now / 9000; camRig.position.set(Math.sin(a) * 26, 9 + Math.sin(a * 0.7) * 2, Math.cos(a) * 26 - 2); camRig.rotation.set(0, a, 0); camera.rotation.set(-0.25, 0, 0);
   }
   ambT -= dt; if (ambT <= 0) { ambT = 0.25; const cp = myPos(); ambient(W.amp / 2, W.storm.on, Math.abs(W.ship.speed), cp.y < waveHeight(cp.x, cp.z), fireLevel); if (W.ship.speed > 2 && Math.random() < 0.08 && me.onShip) sfx.creak(); }
-  renderer.render(scene, camera);
+  if (!window.__noRender) renderer.render(scene, camera);
 }
 requestAnimationFrame(frame);
 
@@ -660,12 +719,35 @@ function beginPlay() {
   setTimeout(() => toast('📜 你們有 2 張藏寶圖。按 5 拿出來看，M 打開航海圖'), 4000);
   if (net) $('netst').textContent = (isHost ? '房主' : '船員') + '｜房號 ' + room;
 }
-initUI({
-  onSolo(name, color) { me.name = name; me.color = color; isHost = true; W = newWorld(); initAudio(); beginPlay(); },
+// ---------- 帳號、存檔 ----------
+const acc = new Accounts(); setKeyOf(keyOf);
+function applySave(sv) {
+  if (!sv) return;
+  W.gold = sv.gold | 0; for (const k in W.up) if (sv.up && sv.up[k] != null) W.up[k] = sv.up[k];
+  W.ship.nc = 4 + 2 * W.up.guns; if (sv.sup) Object.assign(W.ship.sup, sv.sup); W.wanted = sv.wanted || 0; W.sunk = sv.sunk || 0;
+  toast(`📦 讀取存檔：${W.gold} 金、強化等級已恢復`);
+}
+function doSave() { if (isHost && acc.me && started) acc.save({ gold: W.gold, up: W.up, sup: W.ship.sup, wanted: W.wanted, sunk: W.sunk }); }
+setInterval(doSave, 45000);
+function joinRoom(code) {
+  if (started) { location.href = location.pathname + '?room=' + encodeURIComponent(code) + (location.search.includes('broker=') ? '&broker=' + new URLSearchParams(location.search).get('broker') : ''); return; }
+  $('tnote').textContent = '正在加入房間 ' + code + '⋯⋯';
+  ui_h.onJoin(acc.me ? acc.me.name : '船員' + Math.floor(Math.random() * 90 + 10), acc.me ? acc.me.color : COLORS[0], code).catch(e => $('tnote').textContent = e.message);
+}
+const ui_h = {
+  acc, colors: COLORS, room: () => room, joinRoom,
+  afterLogin() { me.name = acc.me.name; me.color = acc.me.color; if (ui_h.pendingRoom) { const r = ui_h.pendingRoom; ui_h.pendingRoom = null; joinRoom(r); } },
+  async onSolo(name, color, saved) {
+    me.name = name; me.color = color; isHost = true; W = newWorld();
+    if (saved && acc.me) applySave(await acc.loadSave());
+    if (acc.me) acc.presence('solo');
+    initAudio(); beginPlay();
+  },
   async onHost(name, color) {
     me.name = name; me.color = color; isHost = true; W = newWorld(); room = Array.from({ length: 5 }, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ'[Math.random() * 24 | 0]).join('');
+    if (acc.me) applySave(await acc.loadSave());
     net = location.hash === '#local' ? new LocalNet(room, myId) : new MqttNet(room, myId); net.on('msg', onNet); net.on('status', s => $('netst').textContent = s === 'ok' ? `房主｜房號 ${room}` : '連線中斷，重新連線中⋯⋯');
-    await net.connect(); return room;
+    await net.connect(); if (acc.me) acc.presence(room, true); return room;
   },
   startHosted() { initAudio(); beginPlay(); },
   async onJoin(name, color, code) {
@@ -674,9 +756,9 @@ initUI({
     await net.connect(); initAudio();
     const hi = () => send('p', { id: myId, n: me.name, c: me.color, s: 1, p: [0, DECK, -6], y: 0, it: 0, ca: null, d: 0 });
     hi();
-    return new Promise((res, rej) => { const t0 = performance.now(); const iv = setInterval(() => { if (started) { clearInterval(iv); res(); } else if (performance.now() - t0 > 12000) { clearInterval(iv); rej(new Error('找不到這個房間（房主要先按「出航」）')); } else hi(); }, 800); });
+    return new Promise((res, rej) => { const t0 = performance.now(); const iv = setInterval(() => { if (started) { clearInterval(iv); if (acc.me) acc.presence(room, false); res(); } else if (performance.now() - t0 > 12000) { clearInterval(iv); net.close(); net = null; room = null; rej(new Error('找不到這個房間（房主要先開房並出航）')); } else hi(); }, 800); });
   },
-  colors: COLORS,
-});
-addEventListener('beforeunload', () => { if (net) send('bye', { id: myId, host: isHost ? 1 : 0 }); });
-window.__tb = { npcMeshes, FX, myShip, camera, W: () => W, me, setW: w => W = w, scene, world, act: m => doAct(m), handleEvent };   // 除錯用
+};
+initUI(ui_h);
+addEventListener('beforeunload', () => { doSave(); if (net) send('bye', { id: myId, host: isHost ? 1 : 0 }); if (acc.me) acc.presence(null); });
+window.__tb = { acc, doSave, npcMeshes, FX, myShip, camera, W: () => W, me, setW: w => W = w, scene, world, act: m => doAct(m), handleEvent };   // 除錯用

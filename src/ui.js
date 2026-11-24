@@ -1,6 +1,6 @@
 // ===== 介面：標題、提示、地圖、藏寶圖、收購商 =====
-import { ISLANDS, terrainH, WORLD_R, MERCHANT } from './geo.js';
-import { TIER, UPS, UP_COST, FORT_ISL } from './sim.js';
+import { ISLANDS, terrainH, WORLD_R, SEAS, CASTLES, PORTS, seaAt } from './geo.js';
+import { TIER, UPS, upCost } from './sim.js';
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -16,7 +16,7 @@ export function chatLine(n, t) {
   const d = document.createElement('div'); d.innerHTML = `<b>${esc(n)}</b>：${esc(t)}`; const l = $('chatL'); l.appendChild(d); while (l.children.length > 6) l.firstChild.remove();
   setTimeout(() => d.remove(), 20000);
 }
-const OVS = ['helpOv', 'mapOv', 'shopOv', 'msgOv'];
+const OVS = ['helpOv', 'mapOv', 'shopOv', 'msgOv', 'frOv'];
 export function anyOverlay() { return OVS.some(id => !$(id).classList.contains('hidden')); }
 export function closeAll() { OVS.forEach(id => $(id).classList.add('hidden')); }
 
@@ -26,64 +26,123 @@ const ICONS = {
   plank: '<rect x="3" y="9" width="18" height="6" rx="1" fill="currentColor"/><circle cx="6" cy="12" r="1" fill="#0008"/><circle cx="18" cy="12" r="1" fill="#0008"/>',
   bucket: '<path d="M5 8h14l-2 12H7z" fill="currentColor"/><path d="M5 8c0-5 14-5 14 0" stroke="currentColor" stroke-width="2" fill="none"/>',
   map: '<path d="M3 5l6-2 6 2 6-2v16l-6 2-6-2-6 2z" fill="currentColor"/><path d="M14 10l3 3m0-3l-3 3" stroke="#c4422b" stroke-width="2"/>',
+  gun: '<path d="M2 9h15l2-2h3v4h-3l-1 1h-5l-2 6H6l1-5H2z" fill="currentColor"/>',
   glass: '<path d="M3 15l12-7 2 4-12 7z" fill="currentColor"/><rect x="15" y="5" width="6" height="6" rx="1" transform="rotate(-30 18 8)" fill="currentColor"/>',
 };
-const ITEMN = [['sword', '劍'], ['shovel', '鏟子'], ['plank', '木板'], ['bucket', '水桶'], ['map', '藏寶圖'], ['glass', '望遠鏡']];
+const ITEMN = [['sword', '劍'], ['shovel', '鏟子'], ['plank', '木板'], ['bucket', '水桶'], ['map', '藏寶圖'], ['glass', '望遠鏡'], ['gun', '火槍']];
 export function updateHotbar(me) {
-  const k = me.item + '|' + me.inv.p + '|' + me.bucket + '|' + !!me.carry;
+  const k = me.item + '|' + me.inv.p + '|' + me.bucket + '|' + !!me.carry + '|' + !!me.gunOwned;
   const hb = $('hotbar'); if (hb.dataset.k === k) return; hb.dataset.k = k;
-  hb.innerHTML = ITEMN.map(([ic, n], i) => `<div class="${i === me.item && !me.carry ? 'sel' : ''}"><em>${i + 1}</em><svg viewBox="0 0 24 24">${ICONS[ic]}</svg>${n}${i === 2 ? `<u>×${me.inv.p}</u>` : i === 3 && me.bucket ? '<u>滿</u>' : ''}</div>`).join('');
+  hb.innerHTML = ITEMN.map(([ic, n], i) => `<div class="${i === me.item && !me.carry ? 'sel' : ''}"><em>${i + 1}</em><svg viewBox="0 0 24 24">${ICONS[ic]}</svg>${n}${i === 2 ? `<u>×${me.inv.p}</u>` : i === 3 && me.bucket ? '<u>滿</u>' : i === 6 && !me.gunOwned ? '<u>🔒</u>' : ''}</div>`).join('');
 }
 
+/** 好友清單（大廳與遊戲中共用） */
+export function renderFriends(el, acc, h, inGame) {
+  if (!acc.me) { el.innerHTML = '<div class="note">登入後才能加好友</div>'; return; }
+  const rows = [];
+  for (const [k, r] of acc.requests) rows.push(`<div class="fr req"><span class="dot on"></span><span class="nm">${esc(r.from)}<small>想加你好友</small></span><button class="pri" data-acc="${k}">接受</button><button data-dec="${k}">拒絕</button></div>`);
+  const fl = [...acc.friends.values()].sort((a, b) => (b.on ? 1 : 0) - (a.on ? 1 : 0));
+  for (const f of fl) {
+    const on = f.on, st = !on ? '離線' : on.room === 'solo' ? '單人航行中' : on.room ? `在房間 ${esc(on.room)} 航行中${on.host ? '（船長）' : ''}` : '在大廳';
+    const canJoin = on && on.room && on.room !== 'solo' && on.room !== h.room();
+    const canInv = inGame && on && h.room() && on.room !== h.room();
+    rows.push(`<div class="fr"><span class="dot ${on ? 'on' : ''}"></span><span class="nm">${esc(f.name)}<small>${st}</small></span>${canJoin ? `<button class="tealb" data-join="${esc(on.room)}">加入</button>` : ''}${canInv ? `<button class="pri" data-inv="${f.key}">邀請</button>` : ''}<button class="ghost" data-del="${f.key}" title="刪除好友">✕</button></div>`);
+  }
+  if (!rows.length) rows.push('<div class="note" style="margin:0">還沒有好友。輸入朋友的帳號加好友，對方接受後就會出現在這裡。</div>');
+  el.innerHTML = rows.join('');
+  el.onclick = e => {
+    const b = e.target.closest('button'); if (!b) return;
+    if (b.dataset.acc) acc.accept(b.dataset.acc);
+    else if (b.dataset.dec) acc.decline(b.dataset.dec);
+    else if (b.dataset.join) h.joinRoom(b.dataset.join);
+    else if (b.dataset.inv) { acc.invite(b.dataset.inv, h.room()); b.textContent = '已邀請'; b.disabled = true; }
+    else if (b.dataset.del) { if (b.dataset.sure) acc.remove(b.dataset.del); else { b.dataset.sure = 1; b.textContent = '確定刪除？'; } }
+  };
+}
 export function initUI(h) {
-  let color = h.colors[0];
-  try { $('nameIn').value = localStorage.getItem('tb_name') || ''; color = +(localStorage.getItem('tb_col') || color); } catch (e) {}
+  const acc = h.acc;
+  let color = h.colors[0], mode = 'login';
   const cols = $('cols');
   const drawCols = () => cols.innerHTML = h.colors.map(c => `<button data-c="${c}" class="${c === color ? 'sel' : ''}" style="background:#${c.toString(16).padStart(6, '0')}" aria-label="顏色"></button>`).join('');
   drawCols(); cols.onclick = e => { const b = e.target.closest('button'); if (b) { color = +b.dataset.c; drawCols(); } };
-  const nm = () => { const n = $('nameIn').value.trim().slice(0, 10) || '船員' + Math.floor(Math.random() * 90 + 10); try { localStorage.setItem('tb_name', n); localStorage.setItem('tb_col', color); } catch (e) {} return n; };
   const note = t => $('tnote').textContent = t;
-  $('bSolo').onclick = () => h.onSolo(nm(), color);
+  const setMode = m => { mode = m; $('tLogin').classList.toggle('on', m === 'login'); $('tReg').classList.toggle('on', m === 'reg'); $('regExtra').classList.toggle('hidden', m !== 'reg'); $('bAuth').textContent = m === 'reg' ? '註冊並登入' : '登入'; $('pwIn').autocomplete = m === 'reg' ? 'new-password' : 'current-password'; };
+  $('tLogin').onclick = () => setMode('login'); $('tReg').onclick = () => setMode('reg');
+  const showLobby = () => { $('authBox').classList.add('hidden'); $('lobbyBox').classList.remove('hidden'); $('whoName').textContent = '⚓ ' + acc.me.name; renderFriends($('friendList'), acc, h, false); };
+  const doAuth = async () => {
+    const n = $('accIn').value, p = $('pwIn').value; $('bAuth').disabled = true; note(mode === 'reg' ? '正在註冊⋯⋯' : '正在登入⋯⋯');
+    try { if (mode === 'reg') await acc.register(n, p, color); else await acc.login(n, p); note('登入成功！'); showLobby(); h.afterLogin(); }
+    catch (e) { note(e.message || '連線失敗，請稍後再試'); }
+    $('bAuth').disabled = false;
+  };
+  $('bAuth').onclick = doAuth; $('pwIn').onkeydown = e => { if (e.key === 'Enter') doAuth(); };
+  $('bGuest').onclick = () => h.onSolo('訪客' + Math.floor(Math.random() * 90 + 10), color);
+  $('bLogout').onclick = () => { acc.logout(); $('lobbyBox').classList.add('hidden'); $('authBox').classList.remove('hidden'); note('已登出'); };
+  acc.on('friends', () => { if (!$('lobbyBox').classList.contains('hidden')) renderFriends($('friendList'), acc, h, false); if (!$('frOv').classList.contains('hidden')) renderFriends($('friendList2'), acc, h, true); });
+  acc.on('toast', t => { toast(t); note(t); });
+  acc.on('invite', m => { $('invTxt').textContent = `📨 ${m.from} 邀請你上船（房號 ${m.room}）`; $('invPop').classList.remove('hidden'); $('invGo').onclick = () => { $('invPop').classList.add('hidden'); acc.clearInvite(keyOfName(m.from)); h.joinRoom(m.room); }; $('invNo').onclick = () => { $('invPop').classList.add('hidden'); acc.clearInvite(keyOfName(m.from)); }; });
+  const addFr = async (inp) => { const n = $(inp).value.trim(); if (!n) return; try { const r = await acc.requestFriend(n); $(inp).value = ''; const t = r === 'accepted' ? `🤝 你和 ${n} 成為好友了！` : `已送出好友邀請給 ${n}，等對方接受`; note(t); toast(t); } catch (e) { note(e.message); toast(e.message); } };
+  $('bAddFr').onclick = () => addFr('frIn'); $('bAddFr2').onclick = () => addFr('frIn2');
+  $('bFrX').onclick = () => { $('frOv').classList.add('hidden'); $('cv').requestPointerLock?.(); };
+  $('bSolo').onclick = () => h.onSolo(acc.me.name, acc.me.color, true);
   $('bHost').onclick = async () => {
-    $('bHost').disabled = true; note('正在連線到伺服器⋯⋯');
+    $('bHost').disabled = true; note('正在開房⋯⋯');
     try {
-      const code = await h.onHost(nm(), color);
+      const code = await h.onHost(acc.me.name, acc.me.color);
       const url = location.origin + location.pathname + '?room=' + code;
       $('roomCode').textContent = code; $('roomLink').textContent = url; $('roomBox').classList.remove('hidden');
       $('bCopy').onclick = () => navigator.clipboard?.writeText(url).then(() => $('bCopy').textContent = '已複製！').catch(() => $('bCopy').textContent = '請手動複製');
-      note('朋友打開網址或輸入房號後，按「出航」。出航後朋友也能隨時加入。');
-    } catch (e) { note('連線失敗：' + e.message + '。可以先單人出航。'); $('bHost').disabled = false; }
+      note('好友現在就能從好友清單按「加入」。按「出航」開始，出航後好友也能隨時上船。');
+      renderFriends($('friendList'), acc, h, true);
+    } catch (e) { note('開房失敗：' + e.message); $('bHost').disabled = false; }
   };
   $('bStart').onclick = () => h.startHosted();
   $('bJoin').onclick = () => { $('joinBox').classList.toggle('hidden'); $('codeIn').focus(); };
-  const join = async () => {
-    const code = $('codeIn').value.trim().toUpperCase(); if (code.length !== 5) { note('房號是 5 個英文字母'); return; }
-    $('bJoinGo').disabled = true; note('正在尋找房間 ' + code + '⋯⋯');
-    try { await h.onJoin(nm(), color, code); } catch (e) { note(e.message); $('bJoinGo').disabled = false; }
-  };
+  const join = () => { const code = $('codeIn').value.trim().toUpperCase(); if (code.length !== 5) { note('房號是 5 個英文字母'); return; } h.joinRoom(code); };
   $('bJoinGo').onclick = join; $('codeIn').onkeydown = e => { if (e.key === 'Enter') join(); };
-  const q = new URLSearchParams(location.search).get('room');
-  if (q) { $('joinBox').classList.remove('hidden'); $('codeIn').value = q.toUpperCase().slice(0, 5); note('朋友邀請你上船！輸入名字後按「上船」。'); }
   $('bHelpX').onclick = () => { $('helpOv').classList.add('hidden'); $('cv').requestPointerLock?.(); };
   $('msgB').onclick = () => $('msgOv').classList.add('hidden');
   $('mapOv').onclick = () => $('mapOv').classList.add('hidden');
   $('shopOv').onclick = e => { if (e.target.id === 'shopOv') $('shopOv').classList.add('hidden'); };
+  // 自動登入（上次沒登出）
+  const q = new URLSearchParams(location.search).get('room');
+  if (q) note(`朋友邀請你上船（房號 ${q.toUpperCase()}）！登入後就會自動加入。`);
+  note('正在連線⋯⋯');
+  acc.tryResume().then(me => {
+    if (me) { showLobby(); h.afterLogin(); if (q) h.joinRoom(q.toUpperCase().slice(0, 5)); else note('歡迎回來，' + me.name + '！'); }
+    else { note(q ? `朋友邀請你上船（房號 ${q.toUpperCase()}）！登入或註冊後就會自動加入。` : '登入或註冊帳號，就能加好友一起出航。'); h.pendingRoom = q ? q.toUpperCase().slice(0, 5) : null; }
+  }).catch(() => note('連不上伺服器，可以先「不登入，單人試玩」'));
+  return { showLobby };
 }
+let keyOfName = n => n;
+export function setKeyOf(f) { keyOfName = f; }
 
-export function openShop(W, act) {
+export function openShop(W, act, portName = '港口') {
   const S = W.ship, onShip = W.treasures.filter(t => t.st === 'ship').length;
-  $('shopTxt').innerHTML = `「歡迎回到潮聲港！把寶箱扛到我面前（按 E）我就照價收購：木製 ${TIER[1].gold}、白銀 ${TIER[2].gold}、黃金 ${TIER[3].gold}、要塞金庫箱 ${TIER[4].gold} 金。」<br>你們有 <b>${W.gold}</b> 金，船上還有 <b>${onShip}</b> 個寶箱沒卸下，藏寶圖 <b>${W.quests.length}</b>/3 張。`;
+  $('shopTxt').innerHTML = `「歡迎來到${portName}！把寶箱扛到我面前（按 E）我就照價收購。」<br>你們有 <b>${W.gold.toLocaleString()}</b> 金，船上還有 <b>${onShip}</b> 個寶箱沒卸下，藏寶圖 <b>${W.quests.length}</b>/3 張。`;
   const box = $('shopBtns'); box.innerHTML = '';
+  const close = () => { $('shopOv').classList.add('hidden'); $('cv').requestPointerLock?.(); };
   const head = t => { const d = document.createElement('div'); d.className = 'lab'; d.textContent = t; box.appendChild(d); };
-  const add = (t, f, cls = '', dis = false) => { const b = document.createElement('button'); b.textContent = t; b.className = cls; b.disabled = dis; b.onclick = () => { f(); $('shopOv').classList.add('hidden'); $('cv').requestPointerLock?.(); }; box.appendChild(b); };
+  const add = (t, f, cls = '', dis = false, keep = false) => { const b = document.createElement('button'); b.innerHTML = t; b.className = cls; b.disabled = dis; b.onclick = () => { f(); if (keep) setTimeout(() => openShop(W, act, portName), 120); else close(); }; box.appendChild(b); return b; };
   head('任務');
   add('領取一張新的藏寶圖（免費）', act.quest, 'pri', W.quests.length >= 3);
-  add(W.bounty ? `懸賞進行中：擊沉 ${W.bounty.done}/${W.bounty.need} 艘黑鯊船` : '接下懸賞：擊沉黑鯊海盜船換賞金', act.bounty, 'pri', !!W.bounty);
+  add(W.bounty ? `懸賞進行中：擊沉 ${W.bounty.done}/${W.bounty.need} 艘海盜船` : '接下懸賞：擊沉海盜船換賞金', act.bounty, 'pri', !!W.bounty);
+  if (W.wanted >= 0.5) add(`付罰金撤銷通緝 ${'★'.repeat(Math.ceil(W.wanted))}（${Math.round(W.wanted) * 300} 金）`, act.pardon, 'redb', W.gold < Math.round(W.wanted) * 300);
   head('補給（船要停在港口附近）');
-  add(`補滿彈藥與木板：砲彈 30、鏈彈 6、火焰彈 6、木板 18（60 金）`, act.restock, 'tealb', W.gold < 60);
+  add('補滿彈藥與木板：砲彈 30、鏈彈 6、火焰彈 6、木板 18（60 金）', act.restock, 'tealb', W.gold < 60);
   add(`爆裂彈 ×4（150 金，船上現有 ${S.sup.x}）`, act.buyx, 'tealb', W.gold < 150);
-  head('船隻升級（全體船員共用）');
-  for (const k in UPS) { const lv = W.up[k], cost = UP_COST[lv]; add(lv >= 2 ? `${UPS[k]}：已滿級` : `${UPS[k]} Lv.${lv} → ${lv + 1}（${cost} 金）`, () => act.upgrade(k), '', lv >= 2 || W.gold < cost); }
+  for (const grp of ['武器', '船隻', '大砲']) {
+    head(`強化：${grp}（全體船員共用）`);
+    const grid = document.createElement('div'); grid.className = 'upg'; box.appendChild(grid);
+    for (const k in UPS) {
+      const U = UPS[k]; if (U.group !== grp) continue;
+      const lv = W.up[k], max = lv >= U.max, cost = max ? 0 : upCost(k, lv);
+      const b = document.createElement('button'); b.disabled = max || W.gold < cost;
+      b.innerHTML = `<b>${U.name}</b> <span class="lv">${'■'.repeat(lv)}${'□'.repeat(U.max - lv)}</span><small>${U.desc}</small><span class="cost">${max ? '已滿級' : (k === 'gun' && lv === 0 ? '購買 ' : '升級 ') + cost.toLocaleString() + ' 金'}</span>`;
+      b.onclick = () => { act.upgrade(k); setTimeout(() => openShop(W, act, portName), 150); };
+      grid.appendChild(b);
+    }
+  }
   add('離開', () => {});
   $('shopOv').classList.remove('hidden');
 }
@@ -121,21 +180,24 @@ export function drawMap(W, me, cp, remotes) {
   g.fillStyle = '#e9dcb4'; g.font = '900 15px "Noto Sans TC"'; g.textAlign = 'center'; g.fillStyle = 'rgba(30,40,60,.8)'; g.fillText('暴風雨', sx, sz);
   // 島名
   g.font = '700 16px "Noto Sans TC"'; g.fillStyle = '#3b2716';
-  for (const I of ISLANDS) { const [x, y] = w2m(I.x, I.z, S); g.fillText(I.name + (I.port ? ' ⚓' : ''), x, y + I.r / (WORLD_R * 1.05) / 2 * S + 18); }
+  g.font = '900 30px "Noto Serif TC"'; g.fillStyle = 'rgba(70,45,20,.35)';
+  for (const SA of SEAS) { const [x, y] = w2m(SA.x, SA.z, S); g.fillText(SA.name, x, y - SA.r / (WORLD_R * 1.05) / 2 * S * 0.72); g.strokeStyle = 'rgba(70,45,20,.18)'; g.lineWidth = 2; g.setLineDash([6, 6]); g.beginPath(); g.arc(x, y, SA.r / (WORLD_R * 1.05) / 2 * S, 0, 7); g.stroke(); g.setLineDash([]); }
+  g.font = '700 11px "Noto Sans TC"'; g.fillStyle = '#3b2716';
+  for (const I of ISLANDS) { if (!I.name || I.castle !== undefined) continue; const [x, y] = w2m(I.x, I.z, S); g.font = I.port ? '900 13px "Noto Sans TC"' : '700 11px "Noto Sans TC"'; g.fillText(I.name + (I.port ? ' ⚓' : ''), x, y + I.r / (WORLD_R * 1.05) / 2 * S + 12); }
   // 任務 X
   for (const id of W.quests) { const t = W.treasures.find(x => x.id === id); if (!t) continue; const I = ISLANDS[t.isl]; const [x, y] = w2m(I.x, I.z, S); g.strokeStyle = '#c4422b'; g.lineWidth = 4; g.beginPath(); g.arc(x, y, I.r / (WORLD_R * 1.05) / 2 * S + 8, 0, 7); g.stroke(); }
   // 漂浮物
   for (const t of W.treasures) if (t.st === 'float' || t.st === 'bottle' || t.st === 'ground') { const [x, y] = w2m(t.x, t.z, S); g.fillStyle = t.st === 'bottle' ? '#2e8f6a' : '#e0a92d'; g.beginPath(); g.arc(x, y, 4, 0, 7); g.fill(); }
   // 敵船
-  { const I = ISLANDS[FORT_ISL], [x, y] = w2m(I.x, I.z, S); g.fillStyle = W.fort.down ? '#6b6b6b' : '#7a1717'; g.fillRect(x - 7, y - 7, 14, 14); g.fillStyle = '#fff'; g.font = '700 12px "Noto Sans TC"'; g.fillText(W.fort.down ? '要塞（已攻陷）' : '黑鯊要塞', x, y - 12); }
-  for (const e of W.npcs) { if (e.sink > 0) continue; const [x, y] = w2m(e.x, e.z, S); shipIcon(g, x, y, e.heading, e.team === 1 ? '#2f6fc0' : '#1a1412', e.kind === 'flag' ? 1.5 : 1); }
+  CASTLES.forEach((C, i) => { const F = W.forts[i], [x, y] = w2m(C.x, C.z, S); g.fillStyle = F && F.open ? '#8a8a8a' : C.team === 3 ? '#1f4f8c' : '#7a1717'; g.fillRect(x - 6, y - 6, 12, 12); g.strokeStyle = '#fff'; g.lineWidth = 1.5; g.strokeRect(x - 6, y - 6, 12, 12); g.fillStyle = '#2b1a0c'; g.font = '900 12px "Noto Sans TC"'; g.fillText(C.name + (F && F.open ? '（已攻陷）' : ''), x, y - 10); });
+  for (const e of W.npcs) { if (e.sink > 0) continue; const [x, y] = w2m(e.x, e.z, S); shipIcon(g, x, y, e.heading, e.team === 1 ? '#2f6fc0' : e.team === 3 ? '#e8ecef' : '#1a1412', Math.max(0.8, e.scale)); }
   // 我們的船
   const [px, py] = w2m(W.ship.x, W.ship.z, S); shipIcon(g, px, py, W.ship.heading, '#16707a');
   // 自己
   const [mx, my] = w2m(cp.x, cp.z, S); g.fillStyle = '#c4422b'; g.beginPath(); g.arc(mx, my, 5, 0, 7); g.fill(); g.strokeStyle = '#fff'; g.lineWidth = 2; g.stroke();
   // 羅盤玫瑰
   g.save(); g.translate(S - 70, 70); g.fillStyle = '#6b4a2a'; g.font = '900 18px "Noto Sans TC"'; g.fillText('北', 0, -34); g.beginPath(); g.moveTo(0, -26); g.lineTo(7, 0); g.lineTo(0, 26); g.lineTo(-7, 0); g.closePath(); g.fill(); g.restore();
-  g.fillStyle = '#3b2716'; g.font = '700 14px "Noto Sans TC"'; g.textAlign = 'left'; g.fillText('點一下關閉　綠：我們的船　藍：海巡隊　黑：黑鯊海盜　紅圈：藏寶島　金點：寶箱　綠點：漂流瓶', 20, S - 20);
+  g.fillStyle = '#3b2716'; g.font = '700 14px "Noto Sans TC"'; g.textAlign = 'left'; g.fillText('點一下關閉　綠：我們的船　藍：海巡隊　白：國際海警　黑：海盜　方塊：城堡　紅圈：藏寶島　金點：寶箱', 20, S - 20);
 }
 function shipIcon(g, x, y, h, col, sc = 1) { g.save(); g.translate(x, y); g.rotate(Math.PI - h); g.scale(sc, sc); g.fillStyle = col; g.beginPath(); g.moveTo(0, -12); g.lineTo(6, 6); g.lineTo(0, 3); g.lineTo(-6, 6); g.closePath(); g.fill(); g.strokeStyle = '#fff'; g.lineWidth = 1.5; g.stroke(); g.restore(); }
 

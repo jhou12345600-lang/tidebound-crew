@@ -20,13 +20,27 @@ export function woodTex(base = '#8a5a34', key = 'w') {
     }
   }, [2, 2]);
 }
+// 每種船的配色（全部原創）：[船身木色, 甲板木色, 深色件, 飾帶, 帆底色上, 帆底色下]
+const STYLE = {
+  player: ['#8a5530', '#b58352', 0x3b2416, 0x16707a, '#f3ead2', '#ddd0ad'],
+  ally: ['#6a5a4c', '#b58352', 0x3b2416, 0x1f4f8c, '#f4f6f8', '#d9dee4'],
+  raider: ['#3a2a22', '#4b3a2c', 0x1a1412, 0x7a1717, '#3b3a3a', '#232222'],
+  flag: ['#2c201b', '#4b3a2c', 0x120e0c, 0x8c1d1d, '#2e2d2d', '#1a1a1a'],
+  sloop: ['#4a4a32', '#6b5e40', 0x23211a, 0x5d7a3a, '#9aa486', '#6f785e'],
+  red: ['#4a1f16', '#5e3a2a', 0x1e0c08, 0xd0531e, '#8c1f14', '#5a120c'],
+  frost: ['#59646c', '#8a8f94', 0x2a3036, 0xa9d6e8, '#dfeaf0', '#b7c9d4'],
+  mist: ['#3d4442', '#55524a', 0x1d2120, 0x8fb3a8, '#7c8580', '#545b58'],
+  warlord: ['#1d1512', '#3a2a20', 0x0a0706, 0xc9a14a, '#151515', '#050505'],
+  cutter: ['#c9ced2', '#a88c66', 0x2b3442, 0x1f4f8c, '#f7f8fa', '#e3e7ec'],
+  frigate: ['#c0c6cb', '#a88c66', 0x26303d, 0x1f4f8c, '#f7f8fa', '#e3e7ec'],
+  cruiser: ['#aeb6bd', '#9c8160', 0x1c2430, 0x16376b, '#f7f8fa', '#dde3ea'],
+};
 function sailTex(kind) {
-  const enemy = kind === 'raider' || kind === 'flag';
+  const enemy = kind === 'raider' || kind === 'flag', st = STYLE[kind] || STYLE.player;
+  const navy = kind === 'cutter' || kind === 'frigate' || kind === 'cruiser';
   return canvasTex(512, 512, (g, w, h) => {
     const grd = g.createLinearGradient(0, 0, 0, h);
-    if (enemy) { grd.addColorStop(0, '#3b3a3a'); grd.addColorStop(1, '#232222'); }
-    else if (kind === 'ally') { grd.addColorStop(0, '#f4f6f8'); grd.addColorStop(1, '#d9dee4'); }
-    else { grd.addColorStop(0, '#f3ead2'); grd.addColorStop(1, '#ddd0ad'); }
+    grd.addColorStop(0, st[4]); grd.addColorStop(1, st[5]);
     g.fillStyle = grd; g.fillRect(0, 0, w, h);
     g.strokeStyle = enemy ? 'rgba(0,0,0,.35)' : 'rgba(120,90,50,.25)'; g.lineWidth = 3;
     for (let x = 64; x < w; x += 64) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x, h); g.stroke(); }
@@ -35,6 +49,28 @@ function sailTex(kind) {
       g.strokeStyle = '#8c1d1d'; g.lineWidth = 14; g.beginPath(); g.moveTo(130, 380); g.lineTo(380, 380); g.stroke();
       if (kind === 'flag') { g.lineWidth = 18; g.strokeRect(40, 40, w - 80, h - 80); }
       for (let i = 0; i < 6; i++) { g.fillStyle = 'rgba(80,70,60,.6)'; g.fillRect(Math.random() * w, Math.random() * h, 40 + Math.random() * 40, 30 + Math.random() * 30); }
+    } else if (navy) {   // 國際海警：藍色寬帶＋金色錨與星
+      g.fillStyle = '#1f4f8c'; g.fillRect(0, 300, w, 70); g.fillStyle = '#c9a14a'; g.fillRect(0, 372, w, 10);
+      g.strokeStyle = '#c9a14a'; g.lineWidth = 16; g.beginPath(); g.moveTo(256, 120); g.lineTo(256, 250); g.stroke();
+      g.beginPath(); g.arc(256, 210, 60, 0.15 * Math.PI, 0.85 * Math.PI); g.stroke(); g.beginPath(); g.moveTo(212, 140); g.lineTo(300, 140); g.stroke();
+      g.fillStyle = '#c9a14a'; g.beginPath(); for (let i = 0; i < 10; i++) { const a = i * Math.PI / 5 - Math.PI / 2, r = i % 2 ? 9 : 22; g.lineTo(256 + Math.cos(a) * r, 92 + Math.sin(a) * r); } g.fill();
+      if (kind === 'cruiser') { g.fillStyle = '#1f4f8c'; g.fillRect(0, 30, w, 24); }
+    } else if (kind === 'sloop') {   // 海蛇快艇：S 形海蛇
+      g.strokeStyle = '#2f4a1e'; g.lineWidth = 26; g.lineCap = 'round'; g.beginPath(); g.moveTo(170, 140); g.bezierCurveTo(360, 160, 150, 300, 330, 360); g.stroke();
+      g.fillStyle = '#2f4a1e'; g.beginPath(); g.arc(160, 135, 26, 0, 7); g.fill();
+    } else if (kind === 'red') {   // 赤焰：橘色火焰
+      g.fillStyle = '#f08a24'; g.beginPath(); g.moveTo(256, 90); g.bezierCurveTo(340, 200, 330, 300, 256, 380); g.bezierCurveTo(180, 300, 170, 220, 230, 170); g.bezierCurveTo(230, 230, 260, 240, 256, 90); g.fill();
+      g.fillStyle = '#ffd27a'; g.beginPath(); g.moveTo(258, 220); g.bezierCurveTo(300, 280, 290, 330, 256, 360); g.bezierCurveTo(220, 330, 222, 290, 258, 220); g.fill();
+    } else if (kind === 'frost') {   // 霜狼：雪花
+      g.strokeStyle = '#3d6f8a'; g.lineWidth = 12; g.lineCap = 'round';
+      for (let i = 0; i < 6; i++) { const a = i * Math.PI / 3; g.beginPath(); g.moveTo(256, 240); g.lineTo(256 + Math.cos(a) * 120, 240 + Math.sin(a) * 120); g.stroke(); for (const t of [0.5, 0.75]) { const bx = 256 + Math.cos(a) * 120 * t, by = 240 + Math.sin(a) * 120 * t; for (const s2 of [-1, 1]) { g.beginPath(); g.moveTo(bx, by); g.lineTo(bx + Math.cos(a + s2 * 0.8) * 30, by + Math.sin(a + s2 * 0.8) * 30); g.stroke(); } } }
+    } else if (kind === 'mist') {   // 幽霧：青白燈籠光
+      const rg = g.createRadialGradient(256, 240, 10, 256, 240, 150); rg.addColorStop(0, 'rgba(200,255,235,.95)'); rg.addColorStop(1, 'rgba(200,255,235,0)'); g.fillStyle = rg; g.fillRect(0, 0, w, h);
+      g.fillStyle = '#2b3230'; g.fillRect(232, 200, 48, 70); g.fillStyle = '#d8fff0'; g.fillRect(240, 208, 32, 54);
+    } else if (kind === 'warlord') {   // 海盜霸主：金色王冠＋紅框
+      g.strokeStyle = '#8c1d1d'; g.lineWidth = 22; g.strokeRect(30, 30, w - 60, h - 60);
+      g.fillStyle = '#c9a14a'; g.beginPath(); g.moveTo(150, 330); g.lineTo(150, 200); g.lineTo(200, 260); g.lineTo(256, 170); g.lineTo(312, 260); g.lineTo(362, 200); g.lineTo(362, 330); g.closePath(); g.fill();
+      g.fillStyle = '#8c1d1d'; for (const x of [200, 256, 312]) { g.beginPath(); g.arc(x, 305, 12, 0, 7); g.fill(); }
     } else if (kind === 'ally') {   // 潮聲港海巡隊：藍底白燈塔
       g.fillStyle = '#1f4f8c'; g.fillRect(0, 150, w, 200);
       g.fillStyle = '#f4f6f8'; g.beginPath(); g.moveTo(236, 330); g.lineTo(276, 330); g.lineTo(266, 190); g.lineTo(246, 190); g.closePath(); g.fill();
@@ -96,12 +132,12 @@ function floorShape(wf, z0, z1, y, hole) {
 }
 
 export function buildShip(kind = 'player') {
-  const enemy = kind === 'raider' || kind === 'flag', mine = kind === 'player';
+  const st = STYLE[kind] || STYLE.player, enemy = !['player', 'ally', 'cutter', 'frigate', 'cruiser'].includes(kind), mine = kind === 'player';
   const root = new THREE.Group();       // 位置／航向／搖晃
-  const wood = new THREE.MeshStandardMaterial({ map: woodTex(enemy ? '#3a2a22' : kind === 'ally' ? '#6a5a4c' : '#8a5530', enemy ? 'we' : kind === 'ally' ? 'wa' : 'w'), roughness: 0.85, side: THREE.DoubleSide });
-  const deckMat = new THREE.MeshStandardMaterial({ map: woodTex(enemy ? '#4b3a2c' : '#b58352', enemy ? 'de' : 'd'), roughness: 0.9, side: THREE.DoubleSide });
-  const dark = new THREE.MeshStandardMaterial({ color: enemy ? 0x1a1412 : 0x3b2416, roughness: 0.8 });
-  const stripe = new THREE.MeshStandardMaterial({ color: enemy ? 0x7a1717 : kind === 'ally' ? 0x1f4f8c : 0x16707a, roughness: 0.6 });
+  const wood = new THREE.MeshStandardMaterial({ map: woodTex(st[0], 'w_' + kind), roughness: 0.85, side: THREE.DoubleSide });
+  const deckMat = new THREE.MeshStandardMaterial({ map: woodTex(st[1], 'd_' + kind), roughness: 0.9, side: THREE.DoubleSide });
+  const dark = new THREE.MeshStandardMaterial({ color: st[2], roughness: 0.8 });
+  const stripe = new THREE.MeshStandardMaterial({ color: st[3], roughness: 0.6 });
   const iron = new THREE.MeshStandardMaterial({ color: 0x2b2b2e, metalness: 0.7, roughness: 0.4 });
   const brass = new THREE.MeshStandardMaterial({ color: 0xc9a14a, metalness: 0.8, roughness: 0.3 });
 
@@ -144,7 +180,7 @@ export function buildShip(kind = 'player') {
   const yard = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 10.4, 8), wood); yard.rotation.z = Math.PI / 2; yard.position.y = DECK + 13.2; sailPivot.add(yard);
   const boom = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 9.6, 8), wood); boom.rotation.z = Math.PI / 2; boom.position.y = DECK + 4.6; sailPivot.add(boom);
   const sailG = new THREE.PlaneGeometry(9.6, 8.4, 12, 10);
-  const sail = new THREE.Mesh(sailG, new THREE.MeshStandardMaterial({ map: sailTex(kind), alphaMap: sailAlpha, alphaTest: 0.5, side: THREE.DoubleSide, roughness: 0.95, emissive: enemy ? 0x0a0a0a : 0x3a342a })); sail.castShadow = true; sail.frustumCulled = false; sailPivot.add(sail);
+  const sail = new THREE.Mesh(sailG, new THREE.MeshStandardMaterial({ map: sailTex(kind), alphaMap: sailAlpha, alphaTest: 0.5, side: THREE.DoubleSide, roughness: 0.95, emissive: enemy && kind !== 'frost' ? 0x0a0a0a : 0x3a342a })); sail.castShadow = true; sail.frustumCulled = false; sailPivot.add(sail);
   const sailBase = Float32Array.from(sailG.attributes.position.array);
   // 船首斜桅
   const bowsprit = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.16, 6, 8), wood); bowsprit.rotation.x = Math.PI / 2 - 0.25; bowsprit.position.set(0, DECK + 1.8, BOW + 1.2); root.add(bowsprit);
@@ -225,7 +261,7 @@ export function buildShip(kind = 'player') {
       wheel.rotation.z = -s.rudder * 3.4;
       cap.rotation.y += (s.anchorMoving || 0) * dt * 2;
       anchor.position.y = DECK - 0.4 - s.anchor * 6;
-      cannons.forEach((c, i) => { const cs = s.cannons[i]; if (!cs) return; c.yaw.rotation.y = cs.yaw; c.pitch.rotation.x = -cs.pitch; c.rec = Math.max(0, c.rec - dt * 1.1); const r = c.rec > 0.85 ? (1 - c.rec) / 0.15 : c.rec / 0.85; c.barrel.position.z = -0.55 * r; c.g.position.x = CANNONS[i].x - CANNONS[i].side * 0.35 * r; });
+      cannons.forEach((c, i) => { const cs = s.cannons[i]; c.g.visible = i < (s.nc || 4); if (!cs) return; c.yaw.rotation.y = cs.yaw; c.pitch.rotation.x = -cs.pitch; c.rec = Math.max(0, c.rec - dt * 1.1); const r = c.rec > 0.85 ? (1 - c.rec) / 0.15 : c.rec / 0.85; c.barrel.position.z = -0.55 * r; c.g.position.x = CANNONS[i].x - CANNONS[i].side * 0.35 * r; });
       // 帆的破洞（依帆的耐久度畫上去）
       if (s.sailHP < sailDrawn - 0.04) { const n = Math.ceil((sailDrawn - s.sailHP) * 14); smg.fillStyle = '#000'; for (let k = 0; k < n; k++) { smg.beginPath(); const cx = 10 + Math.random() * 108, cy = 10 + Math.random() * 108; for (let a = 0; a < 7; a++) { const r = 3 + Math.random() * 8; smg.lineTo(cx + Math.cos(a * 0.9) * r, cy + Math.sin(a * 0.9) * r); } smg.fill(); } sailAlpha.needsUpdate = true; sailDrawn = s.sailHP; }
       else if (s.sailHP > sailDrawn + 0.2) { smg.fillStyle = '#fff'; smg.fillRect(0, 0, 128, 128); sailAlpha.needsUpdate = true; sailDrawn = 1; }
@@ -260,12 +296,12 @@ export function buildShip(kind = 'player') {
 }
 
 /** 寶箱模型 */
-const chestCols = { 1: ['#7a4a26', '#9aa0a8'], 2: ['#5d6670', '#d8dde3'], 3: ['#7a2a1d', '#f2c14e'] };
+const chestCols = { 1: ['#7a4a26', '#9aa0a8'], 2: ['#5d6670', '#d8dde3'], 3: ['#7a2a1d', '#f2c14e'], 4: ['#3a2a5a', '#f2c14e'], 5: ['#1f4f8c', '#e8ecef'], 6: ['#141414', '#ffd34a'] };
 export function buildChest(tier = 1) {
   const [w, m] = chestCols[tier] || chestCols[1];
   const g = new THREE.Group();
   const wood = new THREE.MeshStandardMaterial({ color: w, roughness: 0.8, map: woodTex('#888', 'chest') });
-  const metal = new THREE.MeshStandardMaterial({ color: m, metalness: 0.8, roughness: 0.3, emissive: tier === 3 ? 0x332200 : 0 });
+  const metal = new THREE.MeshStandardMaterial({ color: m, metalness: 0.8, roughness: 0.3, emissive: tier >= 3 && tier !== 5 ? 0x332200 : 0 });
   const body = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.5, 0.6), wood); body.position.y = 0.25; g.add(body);
   const lid = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.9, 12, 1, false, 0, Math.PI).rotateZ(Math.PI / 2), wood); lid.position.y = 0.5; g.add(lid);
   for (const x of [-0.32, 0.32]) { const band = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.52, 0.62), metal); band.position.set(x, 0.26, 0); g.add(band); const bt = new THREE.Mesh(new THREE.CylinderGeometry(0.31, 0.31, 0.08, 12, 1, false, 0, Math.PI).rotateZ(Math.PI / 2), metal); bt.position.set(x, 0.5, 0); g.add(bt); }

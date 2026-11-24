@@ -31,6 +31,16 @@ input{font-family:inherit;font-size:16px;padding:10px 12px;border-radius:10px;bo
 .card h1 small{display:block;font-family:"Noto Sans TC";font-size:15px;letter-spacing:1px;color:var(--teal);margin-top:8px;font-weight:700}
 .card p{margin:10px 0 14px;font-size:15px;line-height:1.6;color:#5b4630}
 .lab{font-size:13px;font-weight:700;color:#7a6040;margin:12px 0 6px}
+.tabs{display:flex;gap:6px;margin-top:6px}.tabs button{flex:1;background:#e8dcbc;box-shadow:none}.tabs button.on{background:var(--ink);color:var(--paper)}
+.who{display:flex;align-items:center;justify-content:space-between;font-weight:900;font-size:18px;margin:4px 0}
+button.sm{padding:6px 12px;min-height:36px;font-size:14px}
+.flist{display:flex;flex-direction:column;gap:6px;margin-top:8px;max-height:30vh;overflow:auto}
+.fr{display:flex;align-items:center;gap:8px;background:#fffaf0;border-radius:10px;padding:6px 10px;font-size:15px}
+.fr .dot{width:12px;height:12px;border-radius:50%;background:#b9ae95;flex:none}.fr .dot.on{background:#3aa55a}
+.fr .nm{flex:1;font-weight:700}.fr small{display:block;font-weight:500;color:#7a6040;font-size:12px}
+.fr button{padding:6px 10px;min-height:36px;font-size:13px}
+.fr.req{background:#fff1c9}
+#invPop{position:fixed;right:16px;top:80px;z-index:40;background:var(--paper);color:var(--ink);border-radius:14px;padding:14px;width:300px;box-shadow:0 10px 30px rgba(0,0,0,.4);font-weight:700}
 .cols{display:flex;gap:8px;flex-wrap:wrap}.cols button{width:44px;height:44px;border-radius:50%;padding:0;border:3px solid transparent}.cols button.sel{border-color:var(--ink)}
 .row{display:flex;gap:8px;margin-top:10px}.row>*{flex:1}
 .note{font-size:13px;color:#7a6040;margin-top:12px;line-height:1.5}
@@ -68,6 +78,9 @@ input{font-family:inherit;font-size:16px;padding:10px 12px;border-radius:10px;bo
 #station:empty{display:none}
 #toasts{position:absolute;top:60px;left:50%;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:6px;width:min(560px,90vw)}
 #toasts div{background:rgba(10,25,35,.78);padding:8px 14px;border-radius:10px;font-size:15px;animation:tin .25s ease-out;text-align:center}
+#seaName{position:absolute;top:22%;left:0;right:0;text-align:center;font-family:"Noto Serif TC",serif;font-size:clamp(34px,5vw,60px);letter-spacing:10px;opacity:0;text-shadow:0 3px 14px rgba(0,0,0,.7)}
+#seaName.show{animation:seaIn 4.5s ease-out}
+@keyframes seaIn{0%{opacity:0;transform:translateY(10px)}15%{opacity:1;transform:none}75%{opacity:1}100%{opacity:0}}
 #toasts div.warn{background:rgba(150,40,25,.85)}
 @keyframes tin{from{opacity:0;transform:translateY(-6px)}}
 #chat{position:absolute;left:16px;bottom:64px;width:min(360px,40vw);font-size:14px;font-weight:500}
@@ -77,9 +90,12 @@ input{font-family:inherit;font-size:16px;padding:10px 12px;border-radius:10px;bo
 #under{position:absolute;inset:0;background:rgba(10,60,80,.45);opacity:0}
 /* 疊層面板 */
 .ov{position:fixed;inset:0;z-index:20;display:flex;align-items:center;justify-content:center;background:rgba(4,14,20,.55);padding:16px}
-.sheet{background:var(--paper);color:var(--ink);border-radius:16px;padding:20px;width:min(560px,100%);max-height:94vh;overflow:auto;box-shadow:0 18px 50px rgba(0,0,0,.5)}
+.sheet{background:var(--paper);color:var(--ink);border-radius:16px;padding:20px;width:min(640px,100%);max-height:94vh;overflow:auto;box-shadow:0 18px 50px rgba(0,0,0,.5)}
 .sheet h2{margin:0 0 10px;font-family:"Noto Serif TC",serif;font-size:30px;line-height:1.1}
 .sheet .btns{display:flex;flex-direction:column;gap:8px;margin-top:10px}
+.upg{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
+.upg button{display:flex;flex-direction:column;align-items:flex-start;gap:3px;text-align:left;font-size:14px;padding:10px}
+.upg .lv{color:#c4422b;letter-spacing:1px;font-size:12px}.upg small{font-weight:500;font-size:12px;color:#6b5236;line-height:1.35}.upg .cost{margin-top:auto;color:#16707a;font-size:13px}
 .keys{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:15px;line-height:1.4}
 .keys b{background:#fffaf0;border:2px solid #c9b88c;border-radius:6px;padding:1px 8px;text-align:center;white-space:nowrap}
 #mapOv canvas{width:min(84vh,92vw);height:min(84vh,92vw);border-radius:14px;box-shadow:0 18px 50px rgba(0,0,0,.5)}
@@ -112,6 +128,7 @@ input{font-family:inherit;font-size:16px;padding:10px 12px;border-radius:10px;bo
   <div id="cross"></div><div id="prompt"></div><div id="prog" class="hidden"><i></i></div>
   <div id="station"></div>
   <div id="toasts"></div>
+  <div id="seaName"></div>
   <div id="chat"><div class="l" id="chatL"></div><input id="chatIn" class="hidden" maxlength="80" placeholder="輸入訊息，Enter 送出"></div>
   <div id="hp"><div style="font-size:13px;margin-bottom:3px">體力 <span id="hpV">100</span>　身上：<span id="invB">無</span>／木板 <span id="invP">0</span></div><div class="bar"><i id="hpB" style="width:100%"></i></div></div>
   <div id="hotbar"></div>
@@ -123,32 +140,45 @@ input{font-family:inherit;font-size:16px;padding:10px 12px;border-radius:10px;bo
 <div id="title">
   <div class="card">
     <h1>怒海同舟<small>3D 多人同船航海冒險</small></h1>
-    <p>和好友擠上同一艘帆船：有人掌舵、有人調帆、有人下艙補洞舀水、有人開砲。照著藏寶圖上島挖寶，扛回潮聲港換金幣，小心黑鯊海盜團與暴風雨。</p>
-    <div class="lab">船員名字</div>
-    <input id="nameIn" maxlength="10" placeholder="例如：阿浪">
-    <div class="lab">衣服顏色</div>
-    <div class="cols" id="cols"></div>
-    <div class="row"><button class="pri" id="bSolo">單人出航</button></div>
-    <div class="row"><button class="tealb" id="bHost">建立房間</button><button id="bJoin">加入房間</button></div>
-    <div id="joinBox" class="hidden"><div class="lab">輸入房號</div><div class="row"><input id="codeIn" maxlength="5" placeholder="ABCDE" style="text-transform:uppercase;letter-spacing:4px"><button class="tealb" id="bJoinGo">上船</button></div></div>
-    <div id="roomBox" class="hidden"><div class="lab" style="margin-top:0">把房號或網址傳給朋友</div><div class="code" id="roomCode"></div><div class="lnk" id="roomLink"></div><div class="row"><button id="bCopy">複製網址</button><button class="pri" id="bStart">出航</button></div></div>
+    <p>和好友擠上同一艘帆船：有人掌舵、有人調帆、有人下艙補洞、有人開砲。照藏寶圖挖寶、搶海盜和海警的寶箱、攻打五片海域的城堡。</p>
+    <div id="authBox">
+      <div class="tabs"><button id="tLogin" class="on">登入</button><button id="tReg">註冊新帳號</button></div>
+      <div class="lab">帳號</div><input id="accIn" maxlength="12" placeholder="2–12 個字（中英數皆可）" autocomplete="username">
+      <div class="lab">密碼</div><input id="pwIn" type="password" maxlength="40" placeholder="至少 4 個字" autocomplete="current-password">
+      <div id="regExtra" class="hidden"><div class="lab">衣服顏色</div><div class="cols" id="cols"></div></div>
+      <div class="row"><button class="pri" id="bAuth">登入</button></div>
+      <div class="note">帳號用來加好友、看好友在不在線、存船隊進度。<b>請不要用你在其他網站的密碼。</b></div>
+      <div class="row"><button class="ghost" id="bGuest">不登入，先單人試玩</button></div>
+    </div>
+    <div id="lobbyBox" class="hidden">
+      <div class="who"><span id="whoName"></span><button class="ghost sm" id="bLogout">登出</button></div>
+      <div class="row"><button class="pri" id="bHost">開房出航（好友可加入）</button></div>
+      <div class="row"><button id="bSolo">單人離線出航</button><button id="bJoin">用房號加入</button></div>
+      <div id="joinBox" class="hidden"><div class="lab">輸入房號</div><div class="row"><input id="codeIn" maxlength="5" placeholder="ABCDE" style="text-transform:uppercase;letter-spacing:4px"><button class="tealb" id="bJoinGo">上船</button></div></div>
+      <div id="roomBox" class="hidden"><div class="lab" style="margin-top:0">房間開好了！好友可以從好友清單直接加入，或用網址／房號</div><div class="code" id="roomCode"></div><div class="lnk" id="roomLink"></div><div class="row"><button id="bCopy">複製網址</button><button class="pri" id="bStart">出航</button></div></div>
+      <div class="lab">好友</div>
+      <div class="row"><input id="frIn" maxlength="12" placeholder="輸入好友的帳號"><button class="tealb" id="bAddFr">加好友</button></div>
+      <div id="friendList" class="flist"></div>
+    </div>
     <div class="note" id="tnote">電腦版遊戲：滑鼠＋鍵盤操作。最多建議 4 人同船。</div>
   </div>
 </div>
-
+<div id="frOv" class="ov hidden"><div class="sheet"><h2>好友</h2><p style="margin:0 0 8px">邀請好友上你們的船：好友會收到通知，按一下就能加入。</p><div class="row"><input id="frIn2" maxlength="12" placeholder="輸入好友的帳號"><button class="tealb" id="bAddFr2">加好友</button></div><div id="friendList2" class="flist"></div><div class="btns"><button class="pri" id="bFrX">關閉</button></div></div></div>
+<div id="invPop" class="hidden"><div id="invTxt"></div><div class="row"><button class="pri" id="invGo">上船</button><button id="invNo">忽略</button></div></div>
 <div id="helpOv" class="ov hidden"><div class="sheet"><h2>船員手冊</h2>
   <div class="keys">
     <b>W A S D</b><span>走路（Shift 跑步、空白鍵跳／游上去）</span>
     <b>滑鼠</b><span>看方向；左鍵使用手上的東西</span>
     <b>E</b><span>互動：掌舵、調帆、絞盤起／下錨、操作大砲、拿補給、撿寶箱、爬梯子、找收購商</span>
-    <b>1–6</b><span>劍、鏟子、木板、水桶、藏寶圖、望遠鏡（滾輪也能換）</span>
+    <b>1–7</b><span>劍、鏟子、木板、水桶、藏寶圖、望遠鏡、火槍（滾輪也能換；火槍要先在港口買）</span>
     <b>G</b><span>放下扛著的寶箱</span>
     <b>R／T</b><span>在大砲旁裝填彈藥／切換彈種（砲彈、鏈彈打帆、火焰彈縱火、爆裂彈大破壞）</span>
     <b>右鍵</b><span>拿望遠鏡時放大</span>
     <b>M</b><span>航海圖</span>
     <b>Enter</b><span>聊天</span>
+    <b>F</b><span>好友清單（邀請好友上船）</span>
   </div>
-  <p style="line-height:1.6;font-size:15px"><b>出航三步：</b>船頭絞盤按 E 起錨 → 桅杆旁按 E，用 W/S 放帆、A/D 轉帆吃風 → 船尾舵輪按 E，A/D 轉向。<br><b>船被打破：</b>到下層船艙找破洞，拿木板（3）對著洞按住左鍵修補（吃水線以下的洞進水最快）；用水桶（4）在艙裡舀水，到甲板再按左鍵倒掉。<b>起火：</b>在船邊欄杆打海水，對著火潑。<b>帆被打爛：</b>拿木板到桅杆按住左鍵修。彈藥箱在下層船艙。<br><b>大戰：</b>出海一段時間後黑鯊艦隊會來襲，海巡隊友軍會來幫忙；鯨骨礁的黑鯊要塞有 4 座砲塔，全部打掉就能搬走金庫。<br><b>挖寶：</b>拿藏寶圖（5）對照島的形狀與 X，上島後拿鏟子（2）在 X 處挖，扛回船上，開回潮聲港賣給收購商。</p>
+  <p style="line-height:1.6;font-size:15px"><b>出航三步：</b>船頭絞盤按 E 起錨 → 桅杆旁按 E，用 W/S 放帆、A/D 轉帆吃風 → 船尾舵輪按 E，A/D 轉向。<br><b>船被打破：</b>到下層船艙找破洞，拿木板（3）對著洞按住左鍵修補（吃水線以下的洞進水最快）；用水桶（4）在艙裡舀水，到甲板再按左鍵倒掉。<b>起火：</b>在船邊欄杆打海水，對著火潑。<b>帆被打爛：</b>拿木板到桅杆按住左鍵修。彈藥箱在下層船艙。<br><b>大戰：</b>出海一段時間後黑鯊艦隊會來襲，海巡隊友軍會來幫忙；五片海域各有一座城堡：先用砲轟掉砲塔，再上岸用劍和火槍打倒守軍，金庫就會打開。<br><b>國際海警：</b>平常只抓海盜；你們打海警、闖進海警基地就會被通緝，星數越高派來的船越強。擊沉海警可以撈到軍餉箱，港口可以付罰金撤銷通緝。<br><b>強化：</b>在任何港口的收購商那裡用金幣強化劍、火槍、體力、船殼、裝甲、船帆、大砲數量、砲管、火藥。<br><b>挖寶：</b>拿藏寶圖（5）對照島的形狀與 X，上島後拿鏟子（2）在 X 處挖，扛回船上，開回潮聲港賣給收購商。</p>
   <div class="btns"><button class="pri" id="bHelpX">知道了</button></div></div></div>
 
 <div id="mapOv" class="ov hidden"><canvas id="mapCv" width="900" height="900"></canvas></div>

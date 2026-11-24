@@ -2,9 +2,8 @@
 import * as THREE from 'three';
 import { Sky } from 'three/addons/objects/Sky.js';
 import { WAVE_GLSL, sea, waveHeight } from './waves.js';
-import { ISLANDS, terrainH, PIERS, MERCHANT, fbm, rng, SEABED } from './geo.js';
+import { ISLANDS, terrainH, PIERS, MERCHANT, PORTS, CASTLES, SEAS, seaAt, WORLD_R, fbm, rng, SEABED } from './geo.js';
 import { woodTex, buildPerson } from './shipmesh.js';
-import { fortTowers, FORT_ISL } from './sim.js';
 
 const NOISE_GLSL = /* glsl */`
 float h2(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
@@ -14,7 +13,7 @@ float fbm5(vec2 p){ float s=0.0, a=0.5; for(int i=0;i<5;i++){ s+=a*n2(p); p=p*2.
 const HULLW_GLSL = /* glsl */`
 float hullW(float z){ if(z>=-1.0){ float t=min(1.0,(z+1.0)/13.0); return max(0.12, 3.4*sqrt(1.0-t*t)); } float t=min(1.0,(-1.0-z)/10.0); return 3.4-0.6*t*t; }
 `;
-const MAXS = 8, DEPTH_SPAN = 3400;
+const MAXS = 8, DEPTH_SPAN = WORLD_R * 2 + 400;
 
 function cloudMaterial() {
   return new THREE.ShaderMaterial({
@@ -42,39 +41,51 @@ function cloudMaterial() {
   });
 }
 
-function buildFort(scene) {
-  const T = fortTowers(), g = new THREE.Group(); scene.add(g);
-  const stone = new THREE.MeshStandardMaterial({ color: 0x8d8778, roughness: 0.95, flatShading: true });
-  const dark = new THREE.MeshStandardMaterial({ color: 0x5d574c, roughness: 1, flatShading: true });
+const FORT_STYLE = {
+  shark: { stone: 0x8d8778, dark: 0x5d574c, flag: 0x1b1b1b },
+  frost: { stone: 0xb9c4cc, dark: 0x7d8a94, flag: 0x9fd0e6 },
+  navy: { stone: 0xc8c9c4, dark: 0x4d5a6a, flag: 0x1f4f8c },
+  red: { stone: 0x6b3a2c, dark: 0x3a1f18, flag: 0xd0531e },
+  mist: { stone: 0x6f7470, dark: 0x3f4441, flag: 0x8fb3a8 },
+};
+function buildFort(scene, C) {
+  const ST = FORT_STYLE[C.faction], g = new THREE.Group(); scene.add(g);
+  const stone = new THREE.MeshStandardMaterial({ color: ST.stone, roughness: 0.95, flatShading: true });
+  const dark = new THREE.MeshStandardMaterial({ color: ST.dark, roughness: 1, flatShading: true });
   const iron = new THREE.MeshStandardMaterial({ color: 0x232325, metalness: 0.6, roughness: 0.45 });
-  const flagM = new THREE.MeshStandardMaterial({ color: 0x1b1b1b, side: THREE.DoubleSide });
-  const towers = T.map((t, i) => {
+  const flagM = new THREE.MeshStandardMaterial({ color: ST.flag, side: THREE.DoubleSide });
+  const T = C.towersPos, H = 10 + C.tier * 1.5;
+  const towers = T.map((t) => {
     const tg = new THREE.Group(); tg.position.set(t.x, t.y - 1, t.z); g.add(tg);
     const intact = new THREE.Group(); tg.add(intact);
-    const body = new THREE.Mesh(new THREE.CylinderGeometry(3.6, 4.3, 11, 12), stone); body.position.y = 5.5; intact.add(body);
-    for (let k = 0; k < 10; k++) { const m = new THREE.Mesh(new THREE.BoxGeometry(1.1, 1.1, 0.9), stone); const a = k / 10 * Math.PI * 2; m.position.set(Math.cos(a) * 3.4, 11.5, Math.sin(a) * 3.4); m.rotation.y = -a; intact.add(m); }
-    const gun = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.38, 2.6, 10).rotateX(Math.PI / 2).translate(0, 0, 1.4), iron); gun.position.y = 11.6; intact.add(gun);
-    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 5), dark); pole.position.set(-2, 13.5, 0); intact.add(pole);
-    const flag = new THREE.Mesh(new THREE.PlaneGeometry(2.2, 1.3), flagM); flag.position.set(-0.9, 15.2, 0); intact.add(flag);
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(3.6, 4.3, H, 12), stone); body.position.y = H / 2; intact.add(body);
+    if (C.faction === 'frost' || C.faction === 'mist') { const cone = new THREE.Mesh(new THREE.ConeGeometry(4.4, 5, 12), dark); cone.position.y = H + 3.4; intact.add(cone); }
+    for (let k = 0; k < 10; k++) { const m = new THREE.Mesh(new THREE.BoxGeometry(1.1, 1.1, 0.9), stone); const a = k / 10 * Math.PI * 2; m.position.set(Math.cos(a) * 3.4, H + 0.5, Math.sin(a) * 3.4); m.rotation.y = -a; intact.add(m); }
+    const gun = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.38, 2.6, 10).rotateX(Math.PI / 2).translate(0, 0, 1.4), iron); gun.position.y = H + 0.6; intact.add(gun);
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 5), dark); pole.position.set(-2, H + 2.5 + (C.faction === 'frost' || C.faction === 'mist' ? 4 : 0), 0); intact.add(pole);
+    const flag = new THREE.Mesh(new THREE.PlaneGeometry(2.2, 1.3), flagM); flag.position.set(-0.9, pole.position.y + 1.7, 0); intact.add(flag);
     const ruin = new THREE.Group(); ruin.visible = false; tg.add(ruin);
     const stub = new THREE.Mesh(new THREE.CylinderGeometry(3.2, 4.3, 3.5, 12, 1, true), dark); stub.position.y = 1.75; ruin.add(stub);
     for (let k = 0; k < 14; k++) { const rk = new THREE.Mesh(new THREE.DodecahedronGeometry(0.6 + Math.random() * 0.9, 0), stone); rk.position.set((Math.random() - .5) * 10, 0.4, (Math.random() - .5) * 10); rk.rotation.set(Math.random() * 3, Math.random() * 3, 0); ruin.add(rk); }
     tg.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
-    return { tg, intact, ruin, gun, flag, x: t.x, y: t.y, z: t.z };
+    return { tg, intact, ruin, gun, flag };
   });
-  // 城牆
+  // 城牆（留一個城門缺口）
   for (let i = 0; i < T.length; i++) {
+    if (i === 0) continue;
     const a = T[i], b = T[(i + 1) % T.length], len = Math.hypot(b.x - a.x, b.z - a.z) - 7;
-    const w = new THREE.Mesh(new THREE.BoxGeometry(1.6, 5, len), stone);
+    const w = new THREE.Mesh(new THREE.BoxGeometry(1.6, 5 + C.tier, len), stone);
     const mx = (a.x + b.x) / 2, mz = (a.z + b.z) / 2; w.position.set(mx, Math.max(terrainH(mx, mz), (a.y + b.y) / 2) + 1.5, mz); w.rotation.y = Math.atan2(b.x - a.x, b.z - a.z);
     w.castShadow = w.receiveShadow = true; g.add(w);
   }
-  const I = ISLANDS[FORT_ISL];
-  const keep = new THREE.Mesh(new THREE.BoxGeometry(9, 6, 9), stone); keep.position.set(I.x, terrainH(I.x, I.z - 8) + 2.5, I.z - 8); keep.castShadow = true; g.add(keep);
+  const keepH = 6 + C.tier * 2, keep = new THREE.Mesh(new THREE.BoxGeometry(10, keepH, 10), stone); keep.position.set(C.x, terrainH(C.x, C.z - 10) + keepH / 2 - 0.5, C.z - 10); keep.castShadow = true; g.add(keep);
+  const kroof = new THREE.Mesh(new THREE.ConeGeometry(8, 5, 4), dark); kroof.position.set(C.x, keep.position.y + keepH / 2 + 2.5, C.z - 10); kroof.rotation.y = Math.PI / 4; g.add(kroof);
+  const vault = new THREE.Mesh(new THREE.BoxGeometry(6, 2.4, 3), iron); vault.position.set(C.x, terrainH(C.x, C.z + 1) + 1, C.z + 1); g.add(vault);
   return {
-    towers,
-    set(hp, t) {
-      towers.forEach((tw, i) => { const alive = hp[i] > 0; tw.intact.visible = alive; tw.ruin.visible = !alive; tw.flag.rotation.y = Math.sin(t * 2 + i) * 0.3; });
+    towers, vault,
+    set(F, t) {
+      towers.forEach((tw, i) => { const alive = F.hp[i] > 0; tw.intact.visible = alive; tw.ruin.visible = !alive; tw.flag.rotation.y = Math.sin(t * 2 + i) * 0.3; });
+      vault.visible = !F.open;
     },
   };
 }
@@ -116,7 +127,7 @@ export function createWorld(canvas) {
   scene.add(sun, sun.target);
 
   // 地形深度貼圖（給海面算淺灘顏色和海岸白浪）
-  const DN = 768, dData = new Uint8Array(DN * DN).fill(Math.round((SEABED + 30) / 80 * 255));
+  const DN = 1600, dData = new Uint8Array(DN * DN).fill(Math.round((SEABED + 30) / 80 * 255));
   for (const I of ISLANDS) {
     const r = I.r * 1.45, i0 = Math.floor(((I.x - r) / DEPTH_SPAN + 0.5) * DN), i1 = Math.ceil(((I.x + r) / DEPTH_SPAN + 0.5) * DN), j0 = Math.floor(((I.z - r) / DEPTH_SPAN + 0.5) * DN), j1 = Math.ceil(((I.z + r) / DEPTH_SPAN + 0.5) * DN);
     for (let j = Math.max(0, j0); j < Math.min(DN, j1); j++) for (let i = Math.max(0, i0); i < Math.min(DN, i1); i++) {
@@ -239,10 +250,22 @@ export function createWorld(canvas) {
   const leafMat = new THREE.MeshStandardMaterial({ color: 0x3f8a3a, roughness: 0.9, side: THREE.DoubleSide, flatShading: true });
   const rockG = new THREE.DodecahedronGeometry(1, 0), rockMat = new THREE.MeshStandardMaterial({ color: 0x8b8680, roughness: 1, flatShading: true });
   const bushG = new THREE.IcosahedronGeometry(1, 0), bushMat = new THREE.MeshStandardMaterial({ color: 0x4f7d2f, roughness: 1, flatShading: true });
-  const C = { sandW: new THREE.Color(0xc9b98a), sand: new THREE.Color(0xe8d6a0), grass: new THREE.Color(0x6a9a45), grass2: new THREE.Color(0x4c7a36), rock: new THREE.Color(0x8c8577), snow: new THREE.Color(0xa59e90), deep: new THREE.Color(0x2b8d93) };
+  const PAL = {
+    temperate: { sandW: 0xc9b98a, sand: 0xe8d6a0, grass: 0x6a9a45, grass2: 0x4c7a36, rock: 0x8c8577, snow: 0xa59e90, deep: 0x2b8d93 },
+    coral: { sandW: 0xe9dfc0, sand: 0xfaf1d6, grass: 0x7fb04a, grass2: 0x5d9440, rock: 0xb8a990, snow: 0xd9cfb6, deep: 0x31c4c0 },
+    ice: { sandW: 0x9aa7ad, sand: 0xc7d2d6, grass: 0xe9f1f4, grass2: 0xd3e2e8, rock: 0x7b8a93, snow: 0xffffff, deep: 0x4a8fa3 },
+    volcano: { sandW: 0x3b3735, sand: 0x2b2826, grass: 0x4f5a3a, grass2: 0x3b4230, rock: 0x3a3330, snow: 0x6b2a18, deep: 0x2d5a5a },
+    mist: { sandW: 0x8a8576, sand: 0xa39d8a, grass: 0x4a6a4a, grass2: 0x36523a, rock: 0x666a66, snow: 0x8a8e8a, deep: 0x3d7a7a },
+  };
+  const PALC = Object.fromEntries(Object.entries(PAL).map(([k, v]) => [k, Object.fromEntries(Object.entries(v).map(([a, b]) => [a, new THREE.Color(b)]))]));
+  const pineG = new THREE.ConeGeometry(1.6, 5, 7).translate(0, 3.5, 0), pineMat = new THREE.MeshStandardMaterial({ color: 0x2f4a36, roughness: 1, flatShading: true });
+  const snowPineMat = new THREE.MeshStandardMaterial({ color: 0xdfe9ee, roughness: 1, flatShading: true });
+  const volcanoes = [];
   const tmp = new THREE.Color(), M4 = new THREE.Matrix4(), Q = new THREE.Quaternion(), V3 = new THREE.Vector3(), SC = new THREE.Vector3();
   for (const I of ISLANDS) {
-    const size = I.r * 2.8, segs = Math.min(170, Math.round(size / 1.6));
+    const C = PALC[I.biome] || PALC.temperate;
+    const size = I.r * 2.8, segs = Math.min(I.sea === 0 ? 170 : 120, Math.round(size / (I.sea === 0 ? 1.6 : 2.1)));
+    if (I.volcano) volcanoes.push({ x: I.x, y: I.h * 0.85, z: I.z });
     const g = new THREE.PlaneGeometry(size, size, segs, segs).rotateX(-Math.PI / 2);
     const p = g.attributes.position, cols = new Float32Array(p.count * 3);
     for (let i = 0; i < p.count; i++) {
@@ -251,18 +274,22 @@ export function createWorld(canvas) {
       const n = fbm(x * 0.08, z * 0.08, 3, 2);
       if (h < -0.2) tmp.copy(C.deep).lerp(C.sandW, Math.max(0, 1 + h / 6));
       else if (h < 2.3) tmp.copy(C.sand).lerp(C.sandW, n * 0.4);
-      else if (slope > 0.9 || h > I.h * 0.8) tmp.copy(C.rock).lerp(C.snow, n * 0.5);
+      else if (I.berg) tmp.copy(C.snow).lerp(C.grass2, n * 0.4);
+      else if (slope > 0.9 || h > I.h * 0.8) tmp.copy(C.rock).lerp(C.snow, I.biome === 'ice' || I.biome === 'volcano' ? Math.min(1, (h / I.h) * 1.2) : n * 0.5);
       else tmp.copy(C.grass).lerp(C.grass2, n).lerp(C.sand, Math.max(0, (3.2 - h)) * 0.5);
       cols.set([tmp.r, tmp.g, tmp.b], i * 3);
     }
     g.setAttribute('color', new THREE.BufferAttribute(cols, 3)); g.computeVertexNormals();
     const m = new THREE.Mesh(g, terrMat); m.position.set(I.x, 0, I.z); m.receiveShadow = true; m.castShadow = true; islandGroup.add(m);
     // 植被
-    const r = rng(I.seed * 7), palms = [], rocks = [], bushes = [];
-    for (let k = 0; k < I.r * 3; k++) {
+    const r = rng(I.seed * 7), palms = [], rocks = [], bushes = [], pines = [];
+    if (I.berg) continue;
+    const usePalm = I.biome === 'temperate' || I.biome === 'coral', usePine = I.biome === 'ice' || I.biome === 'mist';
+    for (let k = 0; k < I.r * (I.sea === 0 ? 3 : 2); k++) {
       const a = r() * 6.283, d = Math.sqrt(r()) * I.r * 1.05, x = I.x + Math.cos(a) * d, z = I.z + Math.sin(a) * d, h = terrainH(x, z);
       if (I.port && z > I.z + 5 && Math.abs(x - I.x) < 50) continue;
-      if (h > 2.6 && h < I.h * 0.7 && r() < 0.55) palms.push([x, h, z, 5 + r() * 5, r()]);
+      if (I.castle !== undefined && Math.hypot(x - I.x, z - I.z) < 50) continue;
+      if (h > 2.6 && h < I.h * 0.7 && r() < 0.55) { if (usePalm) palms.push([x, h, z, 5 + r() * 5, r()]); else if (usePine) pines.push([x, h, z, 0.8 + r() * 0.8]); else if (r() < 0.3) rocks.push([x, h, z, 0.8 + r() * 2]); }
       else if (h > 1 && r() < 0.25) rocks.push([x, h, z, 0.5 + r() * 2.2]);
       else if (h > 3 && r() < 0.4) bushes.push([x, h, z, 0.6 + r() * 1.2]);
     }
@@ -276,6 +303,7 @@ export function createWorld(canvas) {
     tr.castShadow = lf.castShadow = true; islandGroup.add(tr, lf);
     const rk = new THREE.InstancedMesh(rockG, rockMat, rocks.length); rocks.forEach(([x, h, z, s], i) => { Q.setFromEuler(new THREE.Euler(s, s * 3, s * 2)); M4.compose(V3.set(x, h, z), Q, SC.set(s, s * 0.7, s * 1.1)); rk.setMatrixAt(i, M4); }); rk.castShadow = true; islandGroup.add(rk);
     const bu = new THREE.InstancedMesh(bushG, bushMat, bushes.length); bushes.forEach(([x, h, z, s], i) => { M4.compose(V3.set(x, h + s * 0.3, z), Q.identity(), SC.set(s, s * 0.7, s)); bu.setMatrixAt(i, M4); }); islandGroup.add(bu);
+    if (pines.length) { const pn = new THREE.InstancedMesh(pineG, I.biome === 'ice' ? snowPineMat : pineMat, pines.length); pines.forEach(([x, h, z, s], i) => { M4.compose(V3.set(x, h - 0.3, z), Q.identity(), SC.set(s, s, s)); pn.setMatrixAt(i, M4); }); pn.castShadow = true; islandGroup.add(pn); }
   }
 
   // 港口：棧橋、房子、燈塔、收購商
@@ -286,34 +314,38 @@ export function createWorld(canvas) {
     const top = new THREE.Mesh(new THREE.BoxGeometry(w, 0.3, l), pierMat); top.position.set((p.x0 + p.x1) / 2, p.y - 0.15, (p.z0 + p.z1) / 2); top.receiveShadow = top.castShadow = true; port.add(top);
     for (let z = p.z0 + 1; z < p.z1; z += 4) for (const x of [p.x0 + 0.4, p.x1 - 0.4]) { const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.3, 30, 7), pierMat); pole.position.set(x, p.y - 15, z); port.add(pole); }
   }
-  const P0 = ISLANDS[0];
   const houseCols = [0xd9c7a3, 0xc98f6b, 0xe3dccb, 0x9fb7b0];
-  for (let i = 0; i < 7; i++) {
-    const x = P0.x - 38 + i * 11 + (i > 3 ? 6 : 0), z = P0.z + 28 + (i % 2) * 8; if (Math.abs(x - P0.x) < 8) continue;
-    const h = terrainH(x, z), hg = new THREE.Group(); hg.position.set(x, h, z); hg.rotation.y = (i % 3 - 1) * 0.15;
-    const body = new THREE.Mesh(new THREE.BoxGeometry(7, 5, 6), new THREE.MeshStandardMaterial({ color: houseCols[i % 4], roughness: 0.9 })); body.position.y = 2.5; hg.add(body);
-    const roof = new THREE.Mesh(new THREE.ConeGeometry(5.6, 3, 4), new THREE.MeshStandardMaterial({ color: 0x8b3a2b, roughness: 0.8 })); roof.position.y = 6.5; roof.rotation.y = Math.PI / 4; roof.scale.set(1, 1, 0.85); hg.add(roof);
-    const door = new THREE.Mesh(new THREE.BoxGeometry(1.4, 2.4, 0.1), new THREE.MeshStandardMaterial({ color: 0x4a2e1a })); door.position.set(0, 1.2, 3.02); hg.add(door);
-    hg.traverse(o => { if (o.isMesh) { o.castShadow = o.receiveShadow = true; } }); port.add(hg);
+  for (const PT of PORTS) {
+    const P0 = ISLANDS[PT.isl];
+    for (let i = 0; i < 7; i++) {
+      const x = P0.x - 38 + i * 11 + (i > 3 ? 6 : 0), z = P0.z + 28 + (i % 2) * 8; if (Math.abs(x - P0.x) < 8) continue;
+      const h = terrainH(x, z), hg = new THREE.Group(); hg.position.set(x, h, z); hg.rotation.y = (i % 3 - 1) * 0.15;
+      const body = new THREE.Mesh(new THREE.BoxGeometry(7, 5, 6), new THREE.MeshStandardMaterial({ color: houseCols[(i + PT.sea) % 4], roughness: 0.9 })); body.position.y = 2.5; hg.add(body);
+      const roof = new THREE.Mesh(new THREE.ConeGeometry(5.6, 3, 4), new THREE.MeshStandardMaterial({ color: [0x8b3a2b, 0x3d5a73, 0x2f7a6e, 0x5a2a20, 0x4a4f4a][PT.sea], roughness: 0.8 })); roof.position.y = 6.5; roof.rotation.y = Math.PI / 4; roof.scale.set(1, 1, 0.85); hg.add(roof);
+      const door = new THREE.Mesh(new THREE.BoxGeometry(1.4, 2.4, 0.1), new THREE.MeshStandardMaterial({ color: 0x4a2e1a })); door.position.set(0, 1.2, 3.02); hg.add(door);
+      hg.traverse(o => { if (o.isMesh) { o.castShadow = o.receiveShadow = true; } }); port.add(hg);
+    }
+    const M = PT.merchant;
+    const stall = new THREE.Group(); stall.position.set(M.x + 2.5, M.y, M.z + 1.5);
+    const tbl = new THREE.Mesh(new THREE.BoxGeometry(4, 1, 1.4), pierMat); tbl.position.y = 0.5; stall.add(tbl);
+    const awn = new THREE.Mesh(new THREE.BoxGeometry(4.6, 0.1, 2.6), new THREE.MeshStandardMaterial({ color: [0x16707a, 0x3d6f8a, 0x2fb3b0, 0xc4422b, 0x6f7a74][PT.sea] })); awn.position.set(0, 3, -0.4); awn.rotation.x = 0.2; stall.add(awn);
+    for (const x of [-2.1, 2.1]) { const post = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 3), pierMat); post.position.set(x, 1.5, 0.6); stall.add(post); }
+    port.add(stall);
+    const mp = buildPerson([0x16707a, 0x3d6f8a, 0x2f9a8a, 0xa8402a, 0x5a6460][PT.sea], 0x7a2a1d); mp.position.set(M.x + 2.5, M.y, M.z + 0.2); port.add(mp);
+    const pad = new THREE.Mesh(new THREE.BoxGeometry(14, 0.3, 10), pierMat); pad.position.set(M.x, M.y - 0.15, M.z + 1); pad.receiveShadow = true; port.add(pad);
   }
+  const P0 = ISLANDS[0];
   // 燈塔
   const lh = new THREE.Group(); const lx = P0.x + 52, lz = P0.z + 62; lh.position.set(lx, terrainH(lx, lz), lz);
   for (let i = 0; i < 4; i++) { const seg = new THREE.Mesh(new THREE.CylinderGeometry(2.4 - i * 0.35, 2.75 - i * 0.35, 4, 14), new THREE.MeshStandardMaterial({ color: i % 2 ? 0xc4422b : 0xf2ede2 })); seg.position.y = 2 + i * 4; lh.add(seg); }
   const lamp = new THREE.Mesh(new THREE.SphereGeometry(1.2, 12, 10), new THREE.MeshStandardMaterial({ color: 0xfff2c0, emissive: 0xffd27a, emissiveIntensity: 2 })); lamp.position.y = 17.4; lh.add(lamp);
   const lhLight = new THREE.PointLight(0xffd27a, 0, 160, 1.2); lhLight.position.y = 18; lh.add(lhLight); port.add(lh);
-  // 收購商攤位
-  const stall = new THREE.Group(); stall.position.set(MERCHANT.x + 2.5, MERCHANT.y, MERCHANT.z + 1.5);
-  const tbl = new THREE.Mesh(new THREE.BoxGeometry(4, 1, 1.4), pierMat); tbl.position.y = 0.5; stall.add(tbl);
-  const awn = new THREE.Mesh(new THREE.BoxGeometry(4.6, 0.1, 2.6), new THREE.MeshStandardMaterial({ color: 0x16707a })); awn.position.set(0, 3, -0.4); awn.rotation.x = 0.2; stall.add(awn);
-  for (const x of [-2.1, 2.1]) { const post = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 3), pierMat); post.position.set(x, 1.5, 0.6); stall.add(post); }
-  port.add(stall);
-  const merchant = buildPerson(0x16707a, 0x7a2a1d); merchant.position.set(MERCHANT.x + 2.5, MERCHANT.y, MERCHANT.z + 0.2); merchant.rotation.y = 0; port.add(merchant);
-  const pad = new THREE.Mesh(new THREE.BoxGeometry(14, 0.3, 10), pierMat); pad.position.set(MERCHANT.x, MERCHANT.y - 0.15, MERCHANT.z + 1); pad.receiveShadow = true; port.add(pad);
-  merchant.userData.label = '收購商 阿海';
+  const merchant = null;
 
 
-  // 黑鯊要塞
-  const fort = buildFort(scene);
+
+  // 五座城堡
+  const forts = CASTLES.map(C => buildFort(scene, C));
 
   // 雨
   const RN = 3500, rainG = new THREE.BufferGeometry(), rp = new Float32Array(RN * 6);
@@ -322,11 +354,12 @@ export function createWorld(canvas) {
   const rain = new THREE.LineSegments(rainG, new THREE.LineBasicMaterial({ color: 0xaabbcc, transparent: true, opacity: 0.0, fog: false })); rain.frustumCulled = false; rain.visible = false; scene.add(rain);
   const flash = new THREE.AmbientLight(0xdde6ff, 0); scene.add(flash);
 
-  const DUSK = new THREE.Color(0xf0a46a);
+  const DUSK = new THREE.Color(0xf0a46a), TINTS = SEAS.map(S => S.tint.map(c => new THREE.Color(c))), OPEN = [0x02223a, 0x08435e, 0x2fa3a8].map(c => new THREE.Color(c));
+  let biomeFog = 0; const mistC = new THREE.Color(0x9aa6a4), iceC = new THREE.Color(0xdbe8ef), ashC = new THREE.Color(0x8a7a6e);
   const sunDir = new THREE.Vector3(), fogC = new THREE.Color(), skyC = new THREE.Color(), tmpV = new THREE.Vector3();
   let flashT = 0, nextFlash = 4;
   const api = {
-    renderer, scene, camera, sun, water, waterU, merchant, lhLight, fort,
+    renderer, scene, camera, sun, water, waterU, merchant, lhLight, forts, volcanoes,
     resize() { const w = innerWidth, h = innerHeight; renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); },
     /** 每幀更新天空、光線、天氣 */
     update(W, dt, onThunder) {
@@ -353,7 +386,15 @@ export function createWorld(canvas) {
       if (sunDir.y > -0.1 && sunDir.y < 0.18) skyC.lerp(DUSK, (1 - Math.abs(sunDir.y - 0.04) / 0.14) * 0.45 * (1 - storm));
       const under = cp.y < waveHeight(cp.x, cp.z) - 0.05;
       fogC.copy(skyC);
-      let fogD = 0.00045 + storm * 0.0042 + (1 - dayL) * 0.0003;
+      const SA = seaAt(cp.x, cp.z), tint = SA ? TINTS[SA.id] : OPEN;
+      const kk = Math.min(1, dt * 0.6);
+      waterU.uDeep.value.lerp(tint[0], kk); waterU.uMid.value.lerp(tint[1], kk); waterU.uShallow.value.lerp(tint[2], kk);
+      const bf = SA ? { mist: 0.0024, ice: 0.0006, volcano: 0.0009 }[SA.biome] || 0 : 0.0002;
+      biomeFog += (bf - biomeFog) * kk;
+      if (SA && SA.biome === 'mist') fogC.lerp(mistC, Math.min(1, biomeFog / 0.0024) * 0.7 * dayL);
+      if (SA && SA.biome === 'ice') fogC.lerp(iceC, 0.4 * dayL);
+      if (SA && SA.biome === 'volcano') fogC.lerp(ashC, 0.35 * dayL);
+      let fogD = 0.00045 + storm * 0.0042 + (1 - dayL) * 0.0003 + biomeFog;
       if (under) { fogC.setRGB(0.02, 0.17, 0.2).multiplyScalar(0.3 + dayL * 0.7); fogD = 0.045; }
       scene.fog.color.copy(fogC); scene.fog.density = fogD;
       waterU.uFogCol.value.copy(fogC); waterU.uFogD.value = under ? 0.02 : fogD; waterU.uSkyCol.value.copy(skyC);
@@ -380,7 +421,7 @@ export function createWorld(canvas) {
         onThunder && onThunder(cp.x + Math.cos(a) * d, cp.z + Math.sin(a) * d, d);
       }
       flashT = Math.max(0, flashT - dt); flash.intensity = flashT > 0 ? (Math.sin(flashT * 70) > 0 ? 4 : 0.6) * storm : 0;
-      fort.set(W.fort.hp, sea.t);
+      forts.forEach((f, i) => W.forts[i] && f.set(W.forts[i], sea.t));
       return { dayL, storm, fogC, fogD, under };
     },
   };

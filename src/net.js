@@ -8,7 +8,8 @@ export class MqttNet {
   async connect() {
     if (!window.mqtt) throw new Error('連線元件載入失敗（請檢查網路）');
     let lastErr;
-    for (const url of BROKERS) {
+    const list = (new URLSearchParams(location.search).get('broker') || '').split(',').filter(Boolean).concat(BROKERS);
+    for (const url of list) {
       try { await this._try(url); return; } catch (e) { lastErr = e; }
     }
     throw lastErr || new Error('連不上伺服器');

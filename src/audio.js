@@ -25,6 +25,7 @@ function tone(f, dur, gain, type = 'sine', f1, delay = 0) {
 }
 export const sfx = {
   boom(d = 0, big = 1) { const v = Math.max(0.04, 1 - d / 600) * big; burst(2.2, 2200, 40, Math.min(1, 0.9 * v)); tone(55, 1.4, 0.8 * v, 'sine', 25); burst(0.5, 6000, 800, 0.35 * v, 'highpass'); },
+  gunshot(d = 0) { const v = Math.max(0.03, 1 - d / 250); burst(0.35, 5000, 300, 0.7 * v, 'lowpass'); tone(180, 0.15, 0.3 * v, 'square', 60); },
   whistle() { tone(1400, 0.6, 0.06, 'sine', 500); burst(0.6, 3000, 900, 0.1, 'bandpass'); },
   crumble(d = 0) { const v = Math.max(0.05, 1 - d / 500); burst(2.5, 900, 60, 0.8 * v); for (let i = 0; i < 5; i++) burst(0.3, 1500, 200, 0.3 * v, 'bandpass', 0.2 + i * 0.25); },
   rip() { burst(0.35, 5000, 1200, 0.25, 'highpass'); },

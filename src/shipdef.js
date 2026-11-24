@@ -19,9 +19,12 @@ export const STATIONS = {
 };
 export const WHEEL = { x: 0, y: DECK + 1.25, z: -8.8 };
 export const MAST = { x: 0, z: -1, h: 15 };
+// 前 4 門是基本砲位，後 4 門要升級「加裝大砲」才會啟用
 export const CANNONS = [
   { x: 2.45, z: -5.0, side: 1 }, { x: 2.45, z: 5.4, side: 1 },
   { x: -2.45, z: -5.0, side: -1 }, { x: -2.45, z: 5.4, side: -1 },
+  { x: 2.4, z: -7.6, side: 1 }, { x: -2.4, z: -7.6, side: -1 },
+  { x: 2.45, z: 1.6, side: 1 }, { x: -2.45, z: 1.6, side: -1 },
 ];
 export const CRATES = {
   n: { x: 1.5, y: HOLD, z: -6.6, label: '砲彈' },

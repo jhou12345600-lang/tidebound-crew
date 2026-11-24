@@ -150,6 +150,22 @@ export function createFX(scene, camera, renderer) {
       for (let i = 0; i < 40; i++) { a.setXYZ(i, x, y, z); y -= 13.5; x += rs(9); z += rs(9); }
       a.needsUpdate = true; bolt.visible = true; boltT = 0.18;
     },
+    /** 火槍：槍口火光＋彈道線 */
+    gunshot(a, b, mine) {
+      const d = b.clone().sub(a).normalize();
+      for (let i = 0; i < 8; i++) P(add, a.x, a.y, a.z, { vx: d.x * 8 + rs(1), vy: d.y * 8 + rs(1), vz: d.z * 8 + rs(1), life: 0.08 + R() * 0.06, s0: mine ? 0.25 : 0.6, s1: 0.5, c0: WHITE, c1: FIRE, drag: 8 });
+      for (let i = 0; i < 6; i++) P(alpha, a.x, a.y, a.z, { vx: d.x * 2 + rs(0.5), vy: 0.5 + R() * 0.5, vz: d.z * 2 + rs(0.5), life: 1.5 + R(), s0: 0.3, s1: 1.4, c0: SMOKE_L, a: 0.45, wind: 0.4 });
+      const n = Math.min(30, Math.ceil(a.distanceTo(b) / 1.5));
+      for (let i = 1; i <= n; i++) { const t = i / n; P(add, a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t, { life: 0.06 + t * 0.05, s0: 0.12, c0: C(0xfff0b0) }); }
+      for (let i = 0; i < 6; i++) P(alpha, b.x, b.y, b.z, { vx: rs(2), vy: R() * 2, vz: rs(2), life: 0.5, s0: 0.2, s1: 0.6, c0: SAND, a: 0.7, grav: 6 });
+      flash(a.x, a.y, a.z, 300, 0.06);
+    },
+    blood(x, y, z, k = 1) { for (let i = 0; i < 10 * k; i++) P(alpha, x, y, z, { vx: rs(2.5), vy: 1 + R() * 3, vz: rs(2.5), life: 0.5 + R() * 0.4, s0: 0.18, s1: 0.1, c0: C(0x8a1a12), a: 0.9, grav: 12 }); },
+    /** 火山口持續冒煙 */
+    volcano(x, y, z, dt) {
+      if (R() < dt * 8) P(alpha, x + rs(6), y, z + rs(6), { vx: rs(1.5), vy: 7 + R() * 5, vz: rs(1.5), life: 14 + R() * 8, s0: 10, s1: 45, c0: C(0x3a3633), c1: C(0x6b6560), a: 0.55, drag: 0.15, wind: 1.6, fin: 0.05, fo: 1.2 });
+      if (R() < dt * 3) P(add, x + rs(4), y - 2, z + rs(4), { vy: 3 + R() * 3, life: 1.2, s0: 6, s1: 2, c0: C(0xff8a2a), c1: FIRE2, a: 0.7 });
+    },
     ring, flash,
     update(dt, wind, fogCol, fogD) {
       const sc = renderer.domElement.height / (2 * Math.tan(camera.fov * Math.PI / 360));
