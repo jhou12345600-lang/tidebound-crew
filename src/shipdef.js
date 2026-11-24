@@ -24,9 +24,31 @@ export const CANNONS = [
   { x: -2.45, z: -5.0, side: -1 }, { x: -2.45, z: 5.4, side: -1 },
 ];
 export const CRATES = {
-  balls: { x: 1.5, y: HOLD, z: -6.6, label: '砲彈箱' },
-  planks: { x: -1.5, y: HOLD, z: -6.6, label: '木板箱' },
+  n: { x: 1.5, y: HOLD, z: -6.6, label: '砲彈' },
+  p: { x: -1.5, y: HOLD, z: -6.6, label: '木板' },
+  c: { x: 1.5, y: HOLD, z: -4.3, label: '鏈彈' },
+  f: { x: -1.5, y: HOLD, z: -4.3, label: '火焰彈' },
+  x: { x: 0, y: HOLD, z: 7.0, label: '爆裂彈' },
 };
+// 船殼剖面（和 3D 模型同一公式）：回傳某個 z 的龍骨高度與頂高
+export function hullKeel(z) { return KEEL + Math.max(0, (z - 6) / 6) * 1.8 + Math.max(0, (-9 - z)) * 0.6; }
+export function hullTop(z) { return DECK + 0.95 + Math.max(0, (z - 8) / 4) * 0.5 + Math.max(0, (-8 - z) / 3) * 0.8; }
+export function hullSectionPt(z, t) {     // t: 0 左舷頂 → 1 右舷頂
+  const w = hullW(z), keel = hullKeel(z), top = hullTop(z), a = t * Math.PI, sx = -Math.cos(a), sy = Math.sin(a);
+  if (t <= 0 || t >= 1) return [sx * w, top];
+  return [w * Math.pow(Math.abs(sx), 0.4) * Math.sign(sx) * (0.55 + 0.45 * (1 - sy * 0.6)), top - (top - keel) * Math.pow(sy, 0.65)];
+}
+/** 船殼在 (z, y) 處的外側半寬 */
+export function hullXAt(z, y) {
+  // 由龍骨往上找
+  let last = hullSectionPt(z, 0.5);
+  for (let k = 1; k <= 14; k++) {
+    const p = hullSectionPt(z, 0.5 + k / 28);
+    if (p[1] >= y) { const f = (y - last[1]) / ((p[1] - last[1]) || 1); return last[0] + (p[0] - last[0]) * Math.max(0, Math.min(1, f)); }
+    last = p;
+  }
+  return hullW(z);
+}
 export const LADDERS = [{ x: hullW(0) + 0.12, z: 0, side: 1 }, { x: -hullW(0) - 0.12, z: 0, side: -1 }];
 
 /** 船內的地板高度（給定腳底高度 fy，回傳可站上去的最高面；沒有則 null） */
@@ -63,6 +85,13 @@ export function shipClamp(p, onFloorY) {
   }
   if (Math.abs(p.x) > w + 0.6 || p.z > DECK_Z[1] + 0.4 || p.z < DECK_Z[0] - 0.4) return 'over';
   return null;
+}
+/** 砲彈是否穿過船帆（船內座標） */
+export function sailHit(x, y, z, sailAng = 0) {
+  if (y < DECK + 4.6 || y > DECK + 13.2) return false;
+  const a = sailAng * 0.9, dx = x - MAST.x, dz = z - (MAST.z - 0.35);
+  const along = dx * Math.cos(a) - dz * Math.sin(a), across = dx * Math.sin(a) + dz * Math.cos(a);
+  return Math.abs(along) < 4.8 && Math.abs(across) < 1.2;
 }
 /** 砲彈是否打中船殼（船內座標） */
 export function hullHit(x, y, z) {

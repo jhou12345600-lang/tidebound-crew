@@ -51,12 +51,13 @@ input{font-family:inherit;font-size:16px;padding:10px 12px;border-radius:10px;bo
 #topL{position:absolute;top:14px;left:16px;font-size:15px;line-height:1.7}
 #gold{font-size:22px;color:var(--gold)}
 #crew div{font-size:13px;font-weight:500}
+#events{margin-top:6px;font-size:13px;font-weight:500;line-height:1.6}
 #quests{margin-top:6px;font-size:13px;font-weight:500;max-width:260px}
 #shipPanel{position:absolute;top:56px;right:16px;width:230px;background:rgba(10,25,35,.62);border-radius:12px;padding:10px 12px;font-size:14px;line-height:1.7}
 #shipPanel .bar{height:8px;border-radius:4px;background:rgba(255,255,255,.18);overflow:hidden;margin:2px 0 6px}#shipPanel .bar i{display:block;height:100%;background:#4fb3c9}
 #shipPanel .k{display:flex;justify-content:space-between}
 #wind{display:inline-block;transition:transform .3s}
-#hp{position:absolute;left:16px;bottom:18px;width:220px}#hp .bar{height:12px;border-radius:6px;background:rgba(0,0,0,.5);overflow:hidden;border:2px solid rgba(255,255,255,.4)}#hp .bar i{display:block;height:100%;background:linear-gradient(90deg,#c4422b,#e8703a)}
+#hp{position:absolute;left:16px;bottom:18px;width:min(330px,30vw)}#hp .bar{height:12px;border-radius:6px;background:rgba(0,0,0,.5);overflow:hidden;border:2px solid rgba(255,255,255,.4)}#hp .bar i{display:block;height:100%;background:linear-gradient(90deg,#c4422b,#e8703a)}
 #hotbar{position:absolute;bottom:14px;left:50%;transform:translateX(-50%);display:flex;gap:6px}
 #hotbar div{width:62px;height:62px;border-radius:10px;background:rgba(10,25,35,.6);border:2px solid rgba(255,255,255,.25);display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:12px;position:relative}
 #hotbar div svg{width:28px;height:28px;margin-bottom:2px}
@@ -95,7 +96,7 @@ input{font-family:inherit;font-size:16px;padding:10px 12px;border-radius:10px;bo
 <div id="hud" class="hidden">
   <div id="under"></div><div id="hurt"></div>
   <div id="compass"><div class="strip" id="cstrip"></div></div>
-  <div id="topL"><div id="gold">0 金</div><div id="crew"></div><div id="quests"></div></div>
+  <div id="topL"><div id="gold">0 金</div><div id="crew"></div><div id="quests"></div><div id="events"></div></div>
   <div id="shipPanel">
     <div class="k"><span>船速</span><span id="spd">0 節</span></div>
     <div class="k"><span>風向</span><span><span id="wind">⬆</span> <span id="windS"></span></span></div>
@@ -103,14 +104,16 @@ input{font-family:inherit;font-size:16px;padding:10px 12px;border-radius:10px;bo
     <div class="k"><span>錨</span><span id="anchorV">已下錨</span></div>
     <div class="k"><span>船艙進水</span><span id="waterV">0%</span></div><div class="bar"><i id="waterB"></i></div>
     <div class="k"><span>破洞</span><span id="holesV">0</span></div>
-    <div class="k"><span>船上補給</span><span id="supV">砲彈 30／木板 18</span></div>
+    <div class="k"><span>船帆耐久</span><span id="sailHPV">100%</span></div>
+    <div class="k"><span>起火</span><span id="fireV">無</span></div>
+    <div class="k"><span>補給</span><span id="supV" style="font-size:12px"></span></div>
     <div class="k"><span>船上寶箱</span><span id="cargoV">0</span></div>
   </div>
   <div id="cross"></div><div id="prompt"></div><div id="prog" class="hidden"><i></i></div>
   <div id="station"></div>
   <div id="toasts"></div>
   <div id="chat"><div class="l" id="chatL"></div><input id="chatIn" class="hidden" maxlength="80" placeholder="輸入訊息，Enter 送出"></div>
-  <div id="hp"><div style="font-size:13px;margin-bottom:3px">體力 <span id="hpV">100</span>　身上：砲彈 <span id="invB">0</span>／木板 <span id="invP">0</span></div><div class="bar"><i id="hpB" style="width:100%"></i></div></div>
+  <div id="hp"><div style="font-size:13px;margin-bottom:3px">體力 <span id="hpV">100</span>　身上：<span id="invB">無</span>／木板 <span id="invP">0</span></div><div class="bar"><i id="hpB" style="width:100%"></i></div></div>
   <div id="hotbar"></div>
   <div id="netst"></div>
 </div>
@@ -140,12 +143,12 @@ input{font-family:inherit;font-size:16px;padding:10px 12px;border-radius:10px;bo
     <b>E</b><span>互動：掌舵、調帆、絞盤起／下錨、操作大砲、拿補給、撿寶箱、爬梯子、找收購商</span>
     <b>1–6</b><span>劍、鏟子、木板、水桶、藏寶圖、望遠鏡（滾輪也能換）</span>
     <b>G</b><span>放下扛著的寶箱</span>
-    <b>R</b><span>在大砲旁裝填砲彈</span>
+    <b>R／T</b><span>在大砲旁裝填彈藥／切換彈種（砲彈、鏈彈打帆、火焰彈縱火、爆裂彈大破壞）</span>
     <b>右鍵</b><span>拿望遠鏡時放大</span>
     <b>M</b><span>航海圖</span>
     <b>Enter</b><span>聊天</span>
   </div>
-  <p style="line-height:1.6;font-size:15px"><b>出航三步：</b>船頭絞盤按 E 起錨 → 桅杆旁按 E，用 W/S 放帆、A/D 轉帆吃風 → 船尾舵輪按 E，A/D 轉向。<br><b>船被打破：</b>到下層船艙找破洞，拿木板（3）對著洞按住左鍵修補；用水桶（4）在艙裡舀水，到甲板再按左鍵倒掉。補給品在船艙後方的箱子拿。<br><b>挖寶：</b>拿藏寶圖（5）對照島的形狀與 X，上島後拿鏟子（2）在 X 處挖，扛回船上，開回潮聲港賣給收購商。</p>
+  <p style="line-height:1.6;font-size:15px"><b>出航三步：</b>船頭絞盤按 E 起錨 → 桅杆旁按 E，用 W/S 放帆、A/D 轉帆吃風 → 船尾舵輪按 E，A/D 轉向。<br><b>船被打破：</b>到下層船艙找破洞，拿木板（3）對著洞按住左鍵修補（吃水線以下的洞進水最快）；用水桶（4）在艙裡舀水，到甲板再按左鍵倒掉。<b>起火：</b>在船邊欄杆打海水，對著火潑。<b>帆被打爛：</b>拿木板到桅杆按住左鍵修。彈藥箱在下層船艙。<br><b>大戰：</b>出海一段時間後黑鯊艦隊會來襲，海巡隊友軍會來幫忙；鯨骨礁的黑鯊要塞有 4 座砲塔，全部打掉就能搬走金庫。<br><b>挖寶：</b>拿藏寶圖（5）對照島的形狀與 X，上島後拿鏟子（2）在 X 處挖，扛回船上，開回潮聲港賣給收購商。</p>
   <div class="btns"><button class="pri" id="bHelpX">知道了</button></div></div></div>
 
 <div id="mapOv" class="ov hidden"><canvas id="mapCv" width="900" height="900"></canvas></div>

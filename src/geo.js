@@ -74,3 +74,24 @@ export function pickDigSpot(I, r) {
   }
   return { x: I.x, z: I.z };
 }
+
+// ---------- 貿易站（貨物運送目的地）----------
+function shorePoint(I, ang, wantH = 3) {
+  let best = { x: I.x, z: I.z, h: terrainH(I.x, I.z) };
+  for (let d = 0; d < I.r * 1.3; d += 1) {
+    const x = I.x + Math.cos(ang) * d, z = I.z + Math.sin(ang) * d, h = terrainH(x, z);
+    if (h < wantH) break; best = { x, z, h };
+  }
+  return best;
+}
+const portI = ISLANDS[0];
+export const POSTS = [1, 3, 8].map(id => {
+  const I = ISLANDS[id], ang = Math.atan2(portI.z - I.z, portI.x - I.x);
+  const p = shorePoint(I, ang, 2.8);
+  return { isl: id, name: I.name + '貿易站', x: p.x, z: p.z, y: p.h, face: ang };
+});
+// ---------- 海上要塞（老鷹岩）----------
+export const FORT_ISL = 7;
+const FI = ISLANDS[FORT_ISL];
+export const FORT_TOWERS = [0.3, 2.4, 4.4].map((a, i) => { const p = shorePoint(FI, a, 6); return { i, x: p.x, z: p.z, y: p.h }; });
+export const FORT_VAULT = (() => { const p = shorePoint(FI, 1.3, 14); return { x: p.x, z: p.z, y: p.h }; })();

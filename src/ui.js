@@ -1,6 +1,6 @@
 // ===== 介面：標題、提示、地圖、藏寶圖、收購商 =====
 import { ISLANDS, terrainH, WORLD_R, MERCHANT } from './geo.js';
-import { TIER } from './sim.js';
+import { TIER, UPS, UP_COST, FORT_ISL } from './sim.js';
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -30,9 +30,9 @@ const ICONS = {
 };
 const ITEMN = [['sword', '劍'], ['shovel', '鏟子'], ['plank', '木板'], ['bucket', '水桶'], ['map', '藏寶圖'], ['glass', '望遠鏡']];
 export function updateHotbar(me) {
-  const k = me.item + '|' + me.inv.planks + '|' + me.bucket + '|' + me.inv.balls + '|' + !!me.carry;
+  const k = me.item + '|' + me.inv.p + '|' + me.bucket + '|' + !!me.carry;
   const hb = $('hotbar'); if (hb.dataset.k === k) return; hb.dataset.k = k;
-  hb.innerHTML = ITEMN.map(([ic, n], i) => `<div class="${i === me.item && !me.carry ? 'sel' : ''}"><em>${i + 1}</em><svg viewBox="0 0 24 24">${ICONS[ic]}</svg>${n}${i === 2 ? `<u>×${me.inv.planks}</u>` : i === 3 && me.bucket ? '<u>滿</u>' : ''}</div>`).join('');
+  hb.innerHTML = ITEMN.map(([ic, n], i) => `<div class="${i === me.item && !me.carry ? 'sel' : ''}"><em>${i + 1}</em><svg viewBox="0 0 24 24">${ICONS[ic]}</svg>${n}${i === 2 ? `<u>×${me.inv.p}</u>` : i === 3 && me.bucket ? '<u>滿</u>' : ''}</div>`).join('');
 }
 
 export function initUI(h) {
@@ -72,11 +72,18 @@ export function initUI(h) {
 
 export function openShop(W, act) {
   const S = W.ship, onShip = W.treasures.filter(t => t.st === 'ship').length;
-  $('shopTxt').innerHTML = `「歡迎回到潮聲港！把寶箱扛到我面前（按 E）我就照價收購：木製 ${TIER[1].gold}、白銀 ${TIER[2].gold}、黃金 ${TIER[3].gold} 金。」<br>你們有 <b>${W.gold}</b> 金，船上還有 <b>${onShip}</b> 個寶箱沒卸下，藏寶圖 <b>${W.quests.length}</b>/3 張。`;
-  $('shopBtns').innerHTML = '';
-  const add = (t, f, cls = '', dis = false) => { const b = document.createElement('button'); b.textContent = t; b.className = cls; b.disabled = dis; b.onclick = () => { f(); $('shopOv').classList.add('hidden'); $('cv').requestPointerLock?.(); }; $('shopBtns').appendChild(b); };
+  $('shopTxt').innerHTML = `「歡迎回到潮聲港！把寶箱扛到我面前（按 E）我就照價收購：木製 ${TIER[1].gold}、白銀 ${TIER[2].gold}、黃金 ${TIER[3].gold}、要塞金庫箱 ${TIER[4].gold} 金。」<br>你們有 <b>${W.gold}</b> 金，船上還有 <b>${onShip}</b> 個寶箱沒卸下，藏寶圖 <b>${W.quests.length}</b>/3 張。`;
+  const box = $('shopBtns'); box.innerHTML = '';
+  const head = t => { const d = document.createElement('div'); d.className = 'lab'; d.textContent = t; box.appendChild(d); };
+  const add = (t, f, cls = '', dis = false) => { const b = document.createElement('button'); b.textContent = t; b.className = cls; b.disabled = dis; b.onclick = () => { f(); $('shopOv').classList.add('hidden'); $('cv').requestPointerLock?.(); }; box.appendChild(b); };
+  head('任務');
   add('領取一張新的藏寶圖（免費）', act.quest, 'pri', W.quests.length >= 3);
-  add(`補給船隻：砲彈 30＋木板 18（60 金，現有 ${S.balls}／${S.planks}）`, act.restock, 'tealb', W.gold < 60);
+  add(W.bounty ? `懸賞進行中：擊沉 ${W.bounty.done}/${W.bounty.need} 艘黑鯊船` : '接下懸賞：擊沉黑鯊海盜船換賞金', act.bounty, 'pri', !!W.bounty);
+  head('補給（船要停在港口附近）');
+  add(`補滿彈藥與木板：砲彈 30、鏈彈 6、火焰彈 6、木板 18（60 金）`, act.restock, 'tealb', W.gold < 60);
+  add(`爆裂彈 ×4（150 金，船上現有 ${S.sup.x}）`, act.buyx, 'tealb', W.gold < 150);
+  head('船隻升級（全體船員共用）');
+  for (const k in UPS) { const lv = W.up[k], cost = UP_COST[lv]; add(lv >= 2 ? `${UPS[k]}：已滿級` : `${UPS[k]} Lv.${lv} → ${lv + 1}（${cost} 金）`, () => act.upgrade(k), '', lv >= 2 || W.gold < cost); }
   add('離開', () => {});
   $('shopOv').classList.remove('hidden');
 }
@@ -120,16 +127,17 @@ export function drawMap(W, me, cp, remotes) {
   // 漂浮物
   for (const t of W.treasures) if (t.st === 'float' || t.st === 'bottle' || t.st === 'ground') { const [x, y] = w2m(t.x, t.z, S); g.fillStyle = t.st === 'bottle' ? '#2e8f6a' : '#e0a92d'; g.beginPath(); g.arc(x, y, 4, 0, 7); g.fill(); }
   // 敵船
-  for (const e of W.enemies) { const [x, y] = w2m(e.x, e.z, S); shipIcon(g, x, y, e.heading, '#1a1412'); }
+  { const I = ISLANDS[FORT_ISL], [x, y] = w2m(I.x, I.z, S); g.fillStyle = W.fort.down ? '#6b6b6b' : '#7a1717'; g.fillRect(x - 7, y - 7, 14, 14); g.fillStyle = '#fff'; g.font = '700 12px "Noto Sans TC"'; g.fillText(W.fort.down ? '要塞（已攻陷）' : '黑鯊要塞', x, y - 12); }
+  for (const e of W.npcs) { if (e.sink > 0) continue; const [x, y] = w2m(e.x, e.z, S); shipIcon(g, x, y, e.heading, e.team === 1 ? '#2f6fc0' : '#1a1412', e.kind === 'flag' ? 1.5 : 1); }
   // 我們的船
   const [px, py] = w2m(W.ship.x, W.ship.z, S); shipIcon(g, px, py, W.ship.heading, '#16707a');
   // 自己
   const [mx, my] = w2m(cp.x, cp.z, S); g.fillStyle = '#c4422b'; g.beginPath(); g.arc(mx, my, 5, 0, 7); g.fill(); g.strokeStyle = '#fff'; g.lineWidth = 2; g.stroke();
   // 羅盤玫瑰
   g.save(); g.translate(S - 70, 70); g.fillStyle = '#6b4a2a'; g.font = '900 18px "Noto Sans TC"'; g.fillText('北', 0, -34); g.beginPath(); g.moveTo(0, -26); g.lineTo(7, 0); g.lineTo(0, 26); g.lineTo(-7, 0); g.closePath(); g.fill(); g.restore();
-  g.fillStyle = '#3b2716'; g.font = '700 14px "Noto Sans TC"'; g.textAlign = 'left'; g.fillText('點一下關閉　◆ 綠：我們的船　黑：黑鯊海盜　紅圈：藏寶島　金點：寶箱　綠點：漂流瓶', 20, S - 20);
+  g.fillStyle = '#3b2716'; g.font = '700 14px "Noto Sans TC"'; g.textAlign = 'left'; g.fillText('點一下關閉　綠：我們的船　藍：海巡隊　黑：黑鯊海盜　紅圈：藏寶島　金點：寶箱　綠點：漂流瓶', 20, S - 20);
 }
-function shipIcon(g, x, y, h, col) { g.save(); g.translate(x, y); g.rotate(Math.PI - h); g.fillStyle = col; g.beginPath(); g.moveTo(0, -12); g.lineTo(6, 6); g.lineTo(0, 3); g.lineTo(-6, 6); g.closePath(); g.fill(); g.strokeStyle = '#fff'; g.lineWidth = 1.5; g.stroke(); g.restore(); }
+function shipIcon(g, x, y, h, col, sc = 1) { g.save(); g.translate(x, y); g.rotate(Math.PI - h); g.scale(sc, sc); g.fillStyle = col; g.beginPath(); g.moveTo(0, -12); g.lineTo(6, 6); g.lineTo(0, 3); g.lineTo(-6, 6); g.closePath(); g.fill(); g.strokeStyle = '#fff'; g.lineWidth = 1.5; g.stroke(); g.restore(); }
 
 // ---------- 藏寶圖（羊皮紙）----------
 const tmCache = new Map();
