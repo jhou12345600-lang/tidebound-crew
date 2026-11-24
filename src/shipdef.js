@@ -1,0 +1,72 @@
+// ===== 船的格局（船內座標：+z 船頭、+x 右舷、y 向上）— 模擬、碰撞、畫面共用 =====
+export const DECK = 2.4, HOLD = 0.25, KEEL = -1.7;
+export const BOW = 12, STERN = -11;
+/** 船殼半寬 */
+export function hullW(z) {
+  if (z >= -1) { const t = Math.min(1, (z + 1) / 13); return Math.max(0.12, 3.4 * Math.sqrt(1 - t * t)); }
+  const t = Math.min(1, (-1 - z) / 10); return 3.4 - 0.6 * t * t;
+}
+export const deckW = z => Math.max(0, hullW(z) - 0.38);
+export const holdW = z => Math.max(0, hullW(z) * 0.8 - 0.1);
+export const HATCH = { x0: -0.9, x1: 0.9, z0: 2.0, z1: 5.6 };   // 甲板開口＋樓梯（往船頭爬上）
+export const HOLD_Z = [-9.2, 8.6];
+export const DECK_Z = [-10.6, 10.8];
+
+export const STATIONS = {
+  helm: { x: 0, y: DECK, z: -9.6, look: 0 },
+  sail: { x: 0.9, y: DECK, z: -1.0, look: 0 },
+  anchor: { x: 0, y: DECK, z: 8.2, look: 0 },
+};
+export const WHEEL = { x: 0, y: DECK + 1.25, z: -8.8 };
+export const MAST = { x: 0, z: -1, h: 15 };
+export const CANNONS = [
+  { x: 2.45, z: -5.0, side: 1 }, { x: 2.45, z: 5.4, side: 1 },
+  { x: -2.45, z: -5.0, side: -1 }, { x: -2.45, z: 5.4, side: -1 },
+];
+export const CRATES = {
+  balls: { x: 1.5, y: HOLD, z: -6.6, label: '砲彈箱' },
+  planks: { x: -1.5, y: HOLD, z: -6.6, label: '木板箱' },
+};
+export const LADDERS = [{ x: hullW(0) + 0.12, z: 0, side: 1 }, { x: -hullW(0) - 0.12, z: 0, side: -1 }];
+
+/** 船內的地板高度（給定腳底高度 fy，回傳可站上去的最高面；沒有則 null） */
+export function shipFloor(x, fy, z) {
+  let best = null;
+  const inHatch = x > HATCH.x0 && x < HATCH.x1 && z > HATCH.z0 && z < HATCH.z1;
+  const cand = (y) => { if (y <= fy + 0.55 && (best === null || y > best)) best = y; };
+  if (!inHatch && z > DECK_Z[0] && z < DECK_Z[1] && Math.abs(x) < deckW(z) + 0.05) cand(DECK);
+  if (inHatch) cand(HOLD + (z - HATCH.z0) / (HATCH.z1 - HATCH.z0) * (DECK - HOLD));
+  if (z > HOLD_Z[0] && z < HOLD_Z[1] && Math.abs(x) < holdW(z) + 0.05) cand(HOLD);
+  return best;
+}
+/** 把玩家限制在船內牆壁之間；回傳 'over' 表示翻出船外 */
+export function shipClamp(p, onFloorY) {
+  const inHold = p.y < DECK - 0.6;
+  if (inHold) {
+    const inHatch = p.x > HATCH.x0 - 0.05 && p.x < HATCH.x1 + 0.05 && p.z > HATCH.z0 && p.z < HATCH.z1;
+    if (!inHatch || p.y < HOLD + 0.4) {
+      p.z = Math.min(HOLD_Z[1] - 0.3, Math.max(HOLD_Z[0] + 0.3, p.z));
+      const w = holdW(p.z) - 0.3; p.x = Math.max(-w, Math.min(w, p.x));
+    }
+    return null;
+  }
+  // 甲板：欄杆擋住，除非跳起來越過
+  const high = p.y > DECK + 0.75;
+  const w = deckW(p.z) - 0.25;
+  if (!high) {
+    p.z = Math.min(DECK_Z[1] - 0.2, Math.max(DECK_Z[0] + 0.2, p.z));
+    const ww = deckW(p.z) - 0.25; p.x = Math.max(-ww, Math.min(ww, p.x));
+    // 桅杆
+    const mx = p.x - MAST.x, mz = p.z - MAST.z, md = Math.hypot(mx, mz);
+    if (md < 0.65) { p.x = MAST.x + mx / (md || 1) * 0.65; p.z = MAST.z + mz / (md || 1) * 0.65; }
+    return null;
+  }
+  if (Math.abs(p.x) > w + 0.6 || p.z > DECK_Z[1] + 0.4 || p.z < DECK_Z[0] - 0.4) return 'over';
+  return null;
+}
+/** 砲彈是否打中船殼（船內座標） */
+export function hullHit(x, y, z) {
+  if (z < STERN - 0.3 || z > BOW + 0.3) return false;
+  if (y < KEEL - 0.2 || y > DECK + 1.2) return false;
+  return Math.abs(x) < hullW(z) + 0.25;
+}

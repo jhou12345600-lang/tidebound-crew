@@ -1,0 +1,618 @@
+// ===== 怒海同舟 3D：主程式 =====
+import * as THREE from 'three';
+import { createWorld } from './world.js';
+import { buildShip, buildChest, buildPerson } from './shipmesh.js';
+import { newWorld, step, act, pack, unpack, smoothShips, shipPose, cannonMuzzle, shipVel, TIER, BALL_V, GRAV } from './sim.js';
+import { sea, waveHeight } from './waves.js';
+import { ISLANDS, terrainH, groundH, MERCHANT, WORLD_R, nearestIsland } from './geo.js';
+import { DECK, HOLD, STATIONS, CANNONS, CRATES, LADDERS, shipFloor, shipClamp, holdW } from './shipdef.js';
+import { MqttNet, LocalNet } from './net.js';
+import { initAudio, ambient, sfx } from './audio.js';
+import { initUI, ui, toast, chatLine, drawMap, drawTreasureMap, openShop, closeAll, anyOverlay, updateHotbar } from './ui.js';
+
+const $ = id => document.getElementById(id);
+const world = createWorld($('cv'));
+const { scene, camera, renderer } = world;
+
+// ---------- 遊戲狀態 ----------
+let W = newWorld(), isHost = true, net = null, room = null, started = false;
+const myId = Math.random().toString(36).slice(2, 8);
+const COLORS = [0xc4422b, 0x16707a, 0xe0a92d, 0x5a6fd6, 0x6c9a3c, 0x9a4fb0];
+const me = {
+  name: '船員', color: COLORS[0], onShip: true, lp: new THREE.Vector3(0, DECK, -6), wp: new THREE.Vector3(), v: new THREE.Vector3(),
+  yaw: 0, pitch: 0, hp: 100, item: 0, inv: { balls: 0, planks: 0 }, bucket: 0, carry: null, station: null, dead: 0, grounded: true, swim: false,
+  useCD: 0, digProg: 0, digTid: null, repair: null, mapIdx: 0, zoom: false,
+};
+const remotes = new Map();   // id → {id,name,color,s,p:[],yaw,it,ca,d,mesh,last,tp}
+const keys = {};
+let mouseDown = false, locked = false;
+
+// ---------- 場景物件 ----------
+const myShip = buildShip(false); scene.add(myShip.root);
+const enemyMeshes = new Map();
+const camRig = new THREE.Object3D(); camRig.add(camera); myShip.root.add(camRig);
+const treasureMeshes = new Map(), crabMeshes = new Map(), ballVis = new Map();
+const ballGeo = new THREE.SphereGeometry(0.22, 10, 8), ballMat = new THREE.MeshStandardMaterial({ color: 0x1d1d1f, metalness: 0.6, roughness: 0.4 });
+const bottleMesh = () => { const g = new THREE.Group(); const b = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.16, 0.5, 10), new THREE.MeshStandardMaterial({ color: 0x5fae8a, transparent: true, opacity: 0.8, roughness: 0.1 })); b.rotation.z = 1.2; g.add(b); const c = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.12, 6), new THREE.MeshStandardMaterial({ color: 0x8a6a44 })); c.position.set(-0.27, 0.1, 0); c.rotation.z = 1.2; g.add(c); const paper = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.3, 6), new THREE.MeshStandardMaterial({ color: 0xf3ead2 })); paper.rotation.z = 1.2; g.add(paper); return g; };
+const crabMesh = () => {
+  const g = new THREE.Group(), m = new THREE.MeshStandardMaterial({ color: 0xa8553a, roughness: 0.9, flatShading: true }), sh = new THREE.MeshStandardMaterial({ color: 0x6d6a62, roughness: 1, flatShading: true });
+  const body = new THREE.Mesh(new THREE.DodecahedronGeometry(0.75, 0), sh); body.scale.set(1.3, 0.55, 1); body.position.y = 0.7; g.add(body);
+  for (const s of [-1, 1]) {
+    for (let i = 0; i < 3; i++) { const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.04, 0.9, 5), m); leg.position.set(s * 0.95, 0.4, -0.35 + i * 0.35); leg.rotation.z = s * 0.9; g.add(leg); }
+    const claw = new THREE.Group(); claw.position.set(s * 0.6, 0.75, 0.75); const c1 = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.22, 0.55), m); c1.position.z = 0.25; claw.add(c1); const c2 = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 0.4), m); c2.position.set(s * 0.12, 0.14, 0.3); claw.add(c2); g.add(claw);
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.07, 6, 5), new THREE.MeshBasicMaterial({ color: 0xffd34a })); eye.position.set(s * 0.22, 1.05, 0.55); g.add(eye);
+  }
+  g.traverse(o => { if (o.isMesh) o.castShadow = true; }); return g;
+};
+
+// 手上道具（第一人稱）
+const ITEMS = [
+  { k: 'sword', n: '劍' }, { k: 'shovel', n: '鏟子' }, { k: 'plank', n: '木板' }, { k: 'bucket', n: '水桶' }, { k: 'map', n: '藏寶圖' }, { k: 'glass', n: '望遠鏡' },
+];
+const held = new THREE.Group(); held.scale.setScalar(0.55); camera.add(held);
+const heldItems = (() => {
+  const wood = new THREE.MeshStandardMaterial({ color: 0x8a5a34, roughness: 0.9 }), steel = new THREE.MeshStandardMaterial({ color: 0xd5dbe2, metalness: 0.25, roughness: 0.35 }), brass = new THREE.MeshStandardMaterial({ color: 0xd8b25a, metalness: 0.3, roughness: 0.4 });
+  const mk = () => new THREE.Group();
+  const sword = mk(); const blade = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.7, 0.012), steel); blade.position.y = 0.42; sword.add(blade); const guard = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.03, 0.05), brass); guard.position.y = 0.07; sword.add(guard); const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.14, 6), wood); sword.add(grip); sword.rotation.set(-0.5, 0, -0.2);
+  const shovel = mk(); const sh1 = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.8, 6), wood); sh1.position.y = 0.2; shovel.add(sh1); const head = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.25, 0.02), steel); head.position.y = 0.66; shovel.add(head); shovel.rotation.set(-0.9, 0.2, -0.1);
+  const plank = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.03, 0.7), wood); plank.rotation.set(0.2, 0.3, 0);
+  const bucket = mk(); const bk = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.11, 0.24, 12, 1, true), wood); bk.material = wood.clone(); bk.material.side = THREE.DoubleSide; bucket.add(bk); const bw = new THREE.Mesh(new THREE.CircleGeometry(0.13, 12).rotateX(-Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x2a7a8a, roughness: 0.1 })); bw.position.y = 0.08; bucket.add(bw); bucket.userData.w = bw; bucket.position.y = -0.05;
+  const map = new THREE.Mesh(new THREE.PlaneGeometry(0.36, 0.28), new THREE.MeshStandardMaterial({ color: 0xe8d6a0, side: THREE.DoubleSide })); map.position.set(-0.25, 0.05, 0.05); map.rotation.set(-0.6, 0.3, 0);
+  const glass = mk(); const g1 = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.045, 0.4, 10).rotateX(Math.PI / 2), brass); glass.add(g1); glass.rotation.set(0.1, 0.2, 0);
+  const chest = buildChest(1); chest.scale.setScalar(0.7); chest.position.set(-0.32, -0.15, -0.35);
+  return [sword, shovel, plank, bucket, map, glass, chest].map(o => { held.add(o); o.visible = false; return o; });
+})();
+let swingT = 0;
+
+// 砲彈軌跡預覽
+const trajGeo = new THREE.BufferGeometry(); trajGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(60 * 3), 3));
+const traj = new THREE.Line(trajGeo, new THREE.LineDashedMaterial({ color: 0xfff2c0, dashSize: 1.2, gapSize: 0.8, transparent: true, opacity: 0.8, depthTest: false })); traj.visible = false; traj.frustumCulled = false; scene.add(traj);
+
+// ---------- 特效粒子 ----------
+const fxList = [];
+const spriteTex = (() => { const c = document.createElement('canvas'); c.width = c.height = 64; const g = c.getContext('2d'); const gr = g.createRadialGradient(32, 32, 0, 32, 32, 32); gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(1, 'rgba(255,255,255,0)'); g.fillStyle = gr; g.fillRect(0, 0, 64, 64); return new THREE.CanvasTexture(c); })();
+function fx(kind, x, y, z, n = 14) {
+  const col = { splash: 0xe6f4f8, smoke: 0x9a9a9a, splinter: 0x8a5a34, dust: 0xd9c48f, fire: 0xffa23a, blood: 0x6aa0b0 }[kind];
+  for (let i = 0; i < n; i++) {
+    const m = new THREE.Sprite(new THREE.SpriteMaterial({ map: spriteTex, color: col, transparent: true, depthWrite: false, opacity: 0.9 }));
+    m.position.set(x, y, z); const s = kind === 'smoke' ? 1.6 : kind === 'splash' ? 0.9 : 0.4; m.scale.setScalar(s);
+    const v = new THREE.Vector3((Math.random() - .5) * 6, kind === 'splash' ? 6 + Math.random() * 7 : Math.random() * 5, (Math.random() - .5) * 6);
+    if (kind === 'smoke') v.multiplyScalar(0.4);
+    scene.add(m); fxList.push({ m, v, life: kind === 'smoke' ? 2.2 : 1.1, max: kind === 'smoke' ? 2.2 : 1.1, kind, s });
+  }
+}
+function stepFx(dt) {
+  for (const f of fxList) {
+    f.life -= dt; f.v.y -= (f.kind === 'smoke' ? -0.6 : 14) * dt; f.m.position.addScaledVector(f.v, dt);
+    f.m.material.opacity = Math.max(0, f.life / f.max) * 0.9; if (f.kind === 'smoke') f.m.scale.setScalar(f.s * (1 + (f.max - f.life) * 1.5));
+    if (f.life <= 0) { scene.remove(f.m); f.m.material.dispose(); }
+  }
+  for (let i = fxList.length - 1; i >= 0; i--) if (fxList[i].life <= 0) fxList.splice(i, 1);
+}
+let shake = 0;
+
+// ---------- 網路 ----------
+const send = (k, m) => net && net.pub(k, m);
+function doAct(m) {
+  if (isHost) { act(W, myId, m, simPlayers()); flushEvents(); }
+  else send('ac', m);
+}
+function simPlayers() {
+  const l = [{ id: myId, onShip: me.onShip, lp: me.lp.toArray(), wp: me.wp.toArray(), dead: me.dead > 0 }];
+  for (const r of remotes.values()) l.push({ id: r.id, onShip: !!r.s, lp: r.s ? r.p : null, wp: r.s ? null : r.p, dead: !!r.d });
+  return l;
+}
+function flushEvents() {
+  if (!W.events.length) return;
+  const evs = W.events; W.events = [];
+  if (net) send('ev', { l: evs });
+  for (const e of evs) handleEvent(e);
+}
+function onNet(k, m) {
+  if (k === 'st' && !isHost) {
+    // 自己正在操作的站位：保留本地數值，避免被舊狀態拉回
+    const S0 = W.ship, keep = me.station === 'helm' ? { rudder: S0.rudder } : me.station === 'sail' ? { sail: S0.sail, sailAng: S0.sailAng } : null;
+    const ci = me.station && me.station.cannon !== undefined ? me.station.cannon : -1, aim = ci >= 0 ? { ...S0.cannons[ci] } : null;
+    unpack(W, m);
+    if (keep && W.ship.id === S0.id) Object.assign(W.ship, keep);
+    if (aim && W.ship.cannons[ci]) { W.ship.cannons[ci].yaw = aim.yaw; W.ship.cannons[ci].pitch = aim.pitch; } if (!started) beginPlay(); if (Math.abs(sea.t - m.t) > 1.5) sea.t = m.t; else sea.t += (m.t - sea.t) * 0.1; W.t = sea.t; return; }
+  if (k === 'ev' && !isHost) { for (const e of m.l) handleEvent(e); return; }
+  if (k === 'ac' && isHost) { act(W, m._f, m, simPlayers()); flushEvents(); return; }
+  if (k === 'p') {
+    let r = remotes.get(m.id);
+    if (!r) { r = { id: m.id }; remotes.set(m.id, r); toast(`${m.n} 上船了！`); sfx.chime(); }
+    const changed = r.s !== m.s; Object.assign(r, m, { last: performance.now() });
+    if (!r.mesh || r.mesh.userData.col !== m.c) { if (r.mesh) r.mesh.parent?.remove(r.mesh); r.mesh = buildPerson(m.c); r.mesh.userData.col = m.c; addTag(r.mesh, m.n); r.cur = null; }
+    if (changed || !r.cur) { r.cur = m.p.slice(); (m.s ? myShip.root : scene).add(r.mesh); }
+    return;
+  }
+  if (k === 'ch') { chatLine(m.n, m.t); return; }
+  if (k === 'bye') { const r = remotes.get(m.id); if (r) { r.mesh?.parent?.remove(r.mesh); remotes.delete(m.id); toast(`${r.n || '船員'} 下線了`); } if (m.host && !isHost) { ui.msg('房主離開了', '這艘船的房主已經離線，連線結束。重新整理頁面可以再建立或加入房間。'); } return; }
+}
+function addTag(mesh, name) {
+  const c = document.createElement('canvas'); c.width = 256; c.height = 64; const g = c.getContext('2d');
+  g.font = '700 30px "Noto Sans TC",sans-serif'; g.textAlign = 'center'; g.fillStyle = 'rgba(10,25,35,.6)'; const w = g.measureText(name).width + 24; g.beginPath(); g.roundRect(128 - w / 2, 10, w, 44, 10); g.fill(); g.fillStyle = '#fff'; g.fillText(name, 128, 43);
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest: false, transparent: true })); s.scale.set(1.6, 0.4, 1); s.position.y = 2.35; s.renderOrder = 5; mesh.add(s);
+}
+
+// ---------- 事件 ----------
+const myPos = () => camera.getWorldPosition(new THREE.Vector3());
+function handleEvent(e) {
+  const cp = myPos();
+  const dist = (x, z) => Math.hypot(x - cp.x, z - cp.z);
+  switch (e.e) {
+    case 'fire': {
+      const m = new THREE.Mesh(ballGeo, ballMat); m.position.fromArray(e.p); scene.add(m);
+      ballVis.set(e.id, { m, v: new THREE.Vector3().fromArray(e.v), life: 9 });
+      fx('smoke', e.p[0], e.p[1], e.p[2], 8); fx('fire', e.p[0], e.p[1], e.p[2], 5); sfx.cannon(dist(e.p[0], e.p[2]));
+      if (e.o === 0 && me.onShip) shake = Math.max(shake, 0.25);
+      break;
+    }
+    case 'hit': { killBall(e.id); fx('splinter', e.x, e.y, e.z, 16); fx('smoke', e.x, e.y, e.z, 4); sfx.hit(dist(e.x, e.z)); if (e.s === 0) { shake = Math.max(shake, me.onShip ? 0.7 : 0.2); if (me.onShip) toast('💥 船被打中了！快下船艙補洞！', 1); } else toast('🎯 命中敵船！'); break; }
+    case 'splash': { killBall(e.id); const y = waveHeight(e.x, e.z); fx('splash', e.x, y, e.z, 16); sfx.splash(dist(e.x, e.z)); break; }
+    case 'boom': { killBall(e.id); fx('dust', e.x, e.y, e.z, 14); sfx.hit(dist(e.x, e.z)); break; }
+    case 'dmg': if (e.pid === myId && me.dead <= 0) { me.hp -= e.n; sfx.hurt(); $('hurt').style.opacity = 1; setTimeout(() => $('hurt').style.opacity = 0, 250); if (me.hp <= 0) die(); } break;
+    case 'give': if (e.pid === myId) { const cap = 5; const k = e.k; me.inv[k] = Math.min(cap, me.inv[k] + e.n); sfx.thunk(); toast(k === 'balls' ? `拿了砲彈（身上 ${me.inv.balls}）` : `拿了木板（身上 ${me.inv.planks}）`); } break;
+    case 'loaded': sfx.thunk(); break;
+    case 'repaired': if (e.pid === myId) { sfx.thunk(); toast('🔨 補好一個破洞'); } break;
+    case 'dug': fx('dust', e.x, terrainH(e.x, e.z) + 0.5, e.z, 20); sfx.dig(); if (e.pid === myId) { toast('✨ 挖到寶箱了！按 E 扛起來，搬回船上'); me.digProg = 0; } break;
+    case 'sold': { sfx.coin(); const who = e.pid === myId ? '你' : (remotes.get(e.pid)?.n || '船員'); toast(`💰 ${who}賣出${TIER[e.tier].name}，獲得 ${e.g} 金`); if (e.pid === myId) { me.carry = null; } break; }
+    case 'msg': if (!e.pid || e.pid === myId) toast(e.t, e.warn); break;
+    case 'sinking': if (e.s === 0) toast('🌊 船在下沉！大家跳船！', 1); break;
+    case 'shipReset': me.onShip = true; me.lp.set(0, DECK, -6); me.v.set(0, 0, 0); me.station = null; me.carry = null; reparentCam(); break;
+    case 'bump': sfx.hit(dist(e.x, e.z)); if (e.s === 0 && me.onShip) { shake = 0.6; toast('💥 撞到礁石了！船身破洞！', 1); } break;
+    case 'crabhit': fx('dust', e.x, terrainH(e.x, e.z) + 0.8, e.z, 8); break;
+  }
+}
+function killBall(id) { const b = ballVis.get(id); if (b) { scene.remove(b.m); ballVis.delete(id); } }
+
+// ---------- 玩家 ----------
+function reparentCam() { (me.onShip ? myShip.root : scene).add(camRig); }
+let shipPoseCur = shipPose(W.ship, 0, {});
+function localToWorld(v) { return v.clone().applyMatrix4(shipPoseCur.mat); }
+function worldToLocal(v) { return v.clone().applyMatrix4(shipPoseCur.inv); }
+function goOverboard() {
+  const wp = localToWorld(me.lp);
+  const lv = me.v.clone().applyQuaternion(shipPoseCur.quat); const [vx, vz] = shipVel(W.ship);
+  me.onShip = false; me.wp.copy(wp); me.v.set(lv.x + vx, lv.y, lv.z + vz); me.station = null; reparentCam();
+}
+function boardShip(L) {
+  me.onShip = true; me.lp.set(L.x - L.side * 0.9, DECK, L.z); me.v.set(0, 0, 0); me.yaw = L.side > 0 ? -Math.PI / 2 : Math.PI / 2; reparentCam(); sfx.thunk();
+}
+function die() { me.dead = 6; me.hp = 0; me.station = null; if (me.carry) { dropCarry(); } $('dead').classList.remove('hidden'); }
+function respawn() {
+  me.dead = 0; me.hp = 100; $('dead').classList.add('hidden');
+  if (W.ship.sink <= 0) { me.onShip = true; me.lp.set(0, DECK, -6); }
+  else { me.onShip = false; me.wp.set(MERCHANT.x, MERCHANT.y, MERCHANT.z + 6); }
+  me.v.set(0, 0, 0); reparentCam();
+}
+function dropCarry() {
+  const t = W.treasures.find(t => t.id === me.carry); if (!t) { me.carry = null; return; }
+  const fwd = new THREE.Vector3(-Math.sin(me.yaw), 0, -Math.cos(me.yaw));
+  if (me.onShip) {
+    const p = me.lp.clone().addScaledVector(fwd, 1.0); const f = shipFloor(p.x, p.y + 0.3, p.z); if (f === null) { p.copy(me.lp); }
+    p.y = shipFloor(p.x, p.y + 0.3, p.z) ?? me.lp.y;
+    doAct({ a: 'drop', tid: me.carry, onShip: 1, p: [+p.x.toFixed(2), +p.y.toFixed(2), +p.z.toFixed(2)] });
+  } else { const p = me.wp.clone().addScaledVector(fwd, 1.0); doAct({ a: 'drop', tid: me.carry, onShip: 0, p: [p.x, p.y, p.z] }); }
+  me.carry = null; me.dropT = performance.now(); sfx.thunk();
+}
+
+/** 找出目前可以互動的東西 */
+function findTarget() {
+  if (me.dead > 0) return null;
+  const eye = myPos(), dir = camera.getWorldDirection(new THREE.Vector3());
+  let best = null, bs = -1;
+  const consider = (wpos, range, o) => {
+    const d = wpos.clone().sub(eye), dl = d.length(); if (dl > range) return;
+    const dot = d.normalize().dot(dir); const score = dot - dl / range * 0.3;
+    if (dot > 0.55 && score > bs) { bs = score; best = o; }
+  };
+  const L = (x, y, z) => localToWorld(new THREE.Vector3(x, y, z));
+  if (me.onShip) {
+    consider(L(0, DECK + 1.2, -8.8), 2.6, { k: 'helm', t: '掌舵' });
+    consider(L(0, DECK + 1.2, -1), 2.4, { k: 'sail', t: '調整船帆' });
+    consider(L(0, DECK + 0.7, STATIONS.anchor.z + 0.9), 2.6, { k: 'anchor', t: W.ship.anchor > 0.5 ? '起錨' : '下錨' });
+    CANNONS.forEach((c, i) => consider(L(c.x, DECK + 0.6, c.z), 2.4, { k: 'cannon', i, t: '操作大砲' }));
+    for (const k in CRATES) { const c = CRATES[k]; consider(L(c.x, c.y + 0.6, c.z), 2.4, { k: 'crate', c: k, t: `拿${k === 'balls' ? '砲彈' : '木板'}（船上剩 ${W.ship[k]}）` }); }
+    for (const h of W.ship.holes) if (me.item === 2 && !me.carry) consider(L(h.x, h.y, h.z), 2.6, { k: 'hole', h, t: me.inv.planks ? '按住左鍵補洞' : '身上沒有木板（去木板箱拿）', lmb: 1 });
+  }
+  for (const t of W.treasures) {
+    if (me.carry) break;
+    if (t.st === 'ship') consider(L(t.lx, t.ly + 0.4, t.lz), 2.5, { k: 'pick', tid: t.id, t: `扛起${TIER[t.tier].name}` });
+    else if (t.st === 'ground') consider(new THREE.Vector3(t.x, t.y + 0.4, t.z), 2.6, { k: 'pick', tid: t.id, t: `扛起${TIER[t.tier].name}` });
+    else if (t.st === 'float' || t.st === 'bottle') consider(new THREE.Vector3(t.x, waveHeight(t.x, t.z), t.z), 3.2, { k: 'pick', tid: t.id, t: t.st === 'bottle' ? '撿起漂流瓶' : `撈起${TIER[t.tier].name}` });
+  }
+  if (!me.onShip) {
+    for (const Ld of LADDERS) consider(L(Ld.x, DECK - 1.2, Ld.z), 3.2, { k: 'ladder', L: Ld, t: '爬上船' });
+    consider(new THREE.Vector3(MERCHANT.x + 2.5, MERCHANT.y + 1.5, MERCHANT.z + 0.2), 4.5, { k: 'shop', t: me.carry ? '賣出寶箱' : '和收購商阿海說話' });
+  }
+  return best;
+}
+function interact(tg) {
+  if (!tg) return;
+  switch (tg.k) {
+    case 'helm': me.station = 'helm'; me.lp.set(STATIONS.helm.x, DECK, STATIONS.helm.z); me.yaw = Math.PI; break;
+    case 'sail': me.station = 'sail'; me.lp.set(STATIONS.sail.x, DECK, STATIONS.sail.z); me.yaw = Math.PI; break;
+    case 'anchor': doAct({ a: 'anchor' }); sfx.creak(); break;
+    case 'cannon': me.station = { cannon: tg.i }; break;
+    case 'crate': { const k = tg.c, need = 5 - me.inv[k]; if (need <= 0) toast('身上已經滿了（最多 5 個）'); else doAct({ a: 'take', k, n: need }); break; }
+    case 'pick': { const bottle = W.treasures.find(t => t.id === tg.tid && t.st === 'bottle'); if (!bottle) { me.carry = tg.tid; me.carryT = performance.now(); } doAct({ a: 'pick', tid: tg.tid }); sfx.thunk(); break; }
+    case 'ladder': boardShip(tg.L); break;
+    case 'shop': if (me.carry) { doAct({ a: 'sell', tid: me.carry }); } else openShopMenu(); break;
+  }
+}
+function openShopMenu() {
+  if (document.pointerLockElement) document.exitPointerLock();
+  openShop(W, {
+    quest: () => doAct({ a: 'quest' }),
+    restock: () => doAct({ a: 'restock' }),
+  });
+}
+
+// ---------- 輸入 ----------
+addEventListener('keydown', e => {
+  if (!started) return;
+  if (document.activeElement === $('chatIn')) {
+    if (e.key === 'Enter') { const t = $('chatIn').value.trim(); if (t) { chatLine(me.name, t); send('ch', { n: me.name, t }); } $('chatIn').value = ''; $('chatIn').classList.add('hidden'); $('chatIn').blur(); $('cv').requestPointerLock?.(); }
+    if (e.key === 'Escape') { $('chatIn').classList.add('hidden'); $('chatIn').blur(); }
+    return;
+  }
+  keys[e.code] = true;
+  if (e.code === 'Enter' && net) { e.preventDefault(); $('chatIn').classList.remove('hidden'); $('chatIn').focus(); document.exitPointerLock?.(); return; }
+  if (e.code === 'KeyH') { $('helpOv').classList.toggle('hidden'); if (!$('helpOv').classList.contains('hidden')) document.exitPointerLock?.(); }
+  if (e.code === 'KeyM') { const o = $('mapOv'); o.classList.toggle('hidden'); if (!o.classList.contains('hidden')) drawMap(W, me, myPos(), remotes); }
+  if (e.code === 'Escape') closeAll();
+  if (anyOverlay()) return;
+  if (e.code.startsWith('Digit')) { const n = +e.code.slice(5) - 1; if (n >= 0 && n < 6 && !me.carry) { me.item = n; sfx.thunk(); } }
+  if (e.code === 'KeyE') {
+    if (me.station) { me.station = null; return; }
+    interact(findTarget());
+  }
+  if (e.code === 'KeyG' && me.carry) dropCarry();
+  if (e.code === 'KeyR' && me.station && me.station.cannon !== undefined) {
+    const cs = W.ship.cannons[me.station.cannon];
+    if (cs.loaded) toast('已經裝好砲彈了'); else if (me.inv.balls <= 0) toast('身上沒有砲彈！去下層船艙的砲彈箱拿', 1); else { me.inv.balls--; cs.loaded = 1; doAct({ a: 'load', i: me.station.cannon }); }
+  }
+  if (e.code === 'KeyQ' && me.item === 4) { me.mapIdx++; sfx.thunk(); }
+  if (e.code === 'Space') e.preventDefault();
+});
+addEventListener('keyup', e => { keys[e.code] = false; });
+addEventListener('mousedown', e => {
+  if (!started || anyOverlay()) return;
+  if (!locked) { $('cv').requestPointerLock?.(); initAudio(); return; }
+  if (e.button === 0) mouseDown = true; if (e.button === 2) me.zoom = true;
+});
+addEventListener('mouseup', e => { if (e.button === 0) mouseDown = false; if (e.button === 2) me.zoom = false; });
+addEventListener('contextmenu', e => e.preventDefault());
+addEventListener('wheel', e => { if (!started || !locked || me.carry || me.station) return; me.item = (me.item + (e.deltaY > 0 ? 1 : 5)) % 6; });
+document.addEventListener('pointerlockchange', () => { locked = document.pointerLockElement === $('cv'); $('pause').classList.toggle('hidden', locked || !started || anyOverlay()); });
+addEventListener('mousemove', e => {
+  if (!locked) return;
+  const s = me.zoom && me.item === 5 ? 0.0006 : 0.0022;
+  if (me.station && me.station.cannon !== undefined) {
+    const cs = W.ship.cannons[me.station.cannon], side = CANNONS[me.station.cannon].side;
+    cs.yaw = Math.max(-0.7, Math.min(0.7, cs.yaw - e.movementX * 0.0016 * 1));
+    cs.pitch = Math.max(-0.12, Math.min(0.5, cs.pitch - e.movementY * 0.0014));
+    return;
+  }
+  me.yaw -= e.movementX * s; me.pitch = Math.max(-1.45, Math.min(1.45, me.pitch - e.movementY * s));
+});
+
+// ---------- 每幀：玩家 ----------
+let netT = 0, aimT = 0, stationSend = 0;
+function updatePlayer(dt) {
+  me.useCD = Math.max(0, me.useCD - dt);
+  if (me.dead > 0) { me.dead -= dt; $('deadT').textContent = Math.ceil(me.dead); if (me.dead <= 0) respawn(); }
+  if (me.hp > 0 && me.hp < 100) me.hp = Math.min(100, me.hp + dt * 2.5);
+  const S = W.ship;
+  if (me.onShip && S.sink > 1.2) { goOverboard(); toast('你掉進海裡了！游到岸邊或等新船', 1); }
+  const typing = document.activeElement === $('chatIn');
+  const k = c => !typing && !anyOverlay() && keys[c];
+  let mx = (k('KeyD') ? 1 : 0) - (k('KeyA') ? 1 : 0), mz = (k('KeyW') ? 1 : 0) - (k('KeyS') ? 1 : 0);
+
+  // ----- 站位操作 -----
+  stationSend -= dt;
+  if (me.station === 'helm') {
+    S.rudder = Math.max(-1, Math.min(1, S.rudder + mx * dt * 0.9));
+    if (stationSend <= 0) { doAct({ a: 'helm', v: +S.rudder.toFixed(3) }); stationSend = 0.12; }
+    mx = mz = 0;
+    $('station').innerHTML = `掌舵中：A/D 轉舵（${S.rudder > 0.05 ? '右' : S.rudder < -0.05 ? '左' : '正'} ${Math.round(Math.abs(S.rudder) * 100)}%）　E 離開`;
+  } else if (me.station === 'sail') {
+    S.sail = Math.max(0, Math.min(1, S.sail + mz * dt * 0.45)); S.sailAng = Math.max(-1, Math.min(1, S.sailAng - mx * dt * 0.6));
+    if (stationSend <= 0) { doAct({ a: 'sail', down: +S.sail.toFixed(3), ang: +S.sailAng.toFixed(3) }); stationSend = 0.12; }
+    mx = mz = 0;
+    $('station').innerHTML = `調帆中：W/S 放下／收起帆（${Math.round(S.sail * 100)}%）　A/D 轉帆（吃風 ${Math.round((S._power || 0) * 100)}%）　E 離開`;
+  } else if (me.station && me.station.cannon !== undefined) {
+    const i = me.station.cannon, c = CANNONS[i], cs = S.cannons[i];
+    const th = (c.side > 0 ? Math.PI / 2 : -Math.PI / 2) + cs.yaw;
+    me.lp.set(c.x - Math.sin(th) * 1.3, DECK, c.z - Math.cos(th) * 1.3);
+    me.yaw = th + Math.PI; me.pitch = cs.pitch * 0.8 - 0.05;
+    aimT -= dt; if (aimT <= 0) { doAct({ a: 'aim', i, yaw: +cs.yaw.toFixed(3), pitch: +cs.pitch.toFixed(3) }); aimT = 0.1; }
+    if (mouseDown && cs.loaded && me.useCD <= 0) { cs.loaded = 0; me.useCD = 0.6; doAct({ a: 'fire', i }); }
+    mx = mz = 0;
+    $('station').innerHTML = `大砲：滑鼠瞄準　左鍵開砲　R 裝填（${cs.loaded ? '<span style="color:#9be08f">已裝填</span>' : '<span style="color:#ff9a7a">未裝填</span>'}，身上砲彈 ${me.inv.balls}）　E 離開`;
+  } else $('station').innerHTML = me.carry ? '扛著寶箱：G 放下（扛到收購商按 E 賣出）' : '';
+
+  // ----- 移動 -----
+  const run = k('ShiftLeft') ? 1.6 : 1, carryF = me.carry ? 0.7 : 1;
+  const sp = (me.swim ? 3.0 : 4.4) * run * carryF;
+  const fx_ = -Math.sin(me.yaw), fz_ = -Math.cos(me.yaw);
+  const wantX = (fx_ * mz + -fz_ * mx) * sp, wantZ = (fz_ * mz + fx_ * mx) * sp;
+  if (me.dead > 0) { me.v.set(0, 0, 0); }
+  else if (me.onShip) {
+    const p = me.lp;
+    const inWater = S.water > 0 && p.y < HOLD + S.water * 2 - 0.4;
+    const f = inWater ? 0.6 : 1;
+    me.v.x += (wantX * f - me.v.x) * Math.min(1, dt * 12); me.v.z += (wantZ * f - me.v.z) * Math.min(1, dt * 12);
+    if (k('Space') && me.grounded) { me.v.y = 6.2; me.grounded = false; }
+    me.v.y -= 20 * dt;
+    p.addScaledVector(me.v, dt);
+    const fl = shipFloor(p.x, p.y, p.z);
+    if (fl !== null && p.y <= fl) { p.y = fl; me.v.y = 0; me.grounded = true; } else me.grounded = false;
+    const r = shipClamp(p);
+    if (r === 'over' || p.y < -4) { goOverboard(); }
+  } else {
+    const p = me.wp;
+    const g = groundH(p.x, p.z), wh = waveHeight(p.x, p.z);
+    me.swim = g < wh - 1.3 && p.y < wh - 0.6;
+    if (me.swim) {
+      me.v.x += (wantX - me.v.x) * Math.min(1, dt * 4); me.v.z += (wantZ - me.v.z) * Math.min(1, dt * 4);
+      const ty = wh - 1.45 + (k('Space') ? 0.4 : 0);
+      me.v.y += (ty - p.y) * dt * 8 - me.v.y * dt * 3;
+      p.addScaledVector(me.v, dt);
+    } else {
+      me.v.x += (wantX - me.v.x) * Math.min(1, dt * 12); me.v.z += (wantZ - me.v.z) * Math.min(1, dt * 12);
+      if (k('Space') && me.grounded) { me.v.y = 6.2; me.grounded = false; }
+      me.v.y -= 20 * dt;
+      const nx = p.x + me.v.x * dt, nz = p.z + me.v.z * dt;
+      const ng = groundH(nx, nz);
+      if (ng - p.y > 1.2 && ng > wh - 1.3) { me.v.x = me.v.z = 0; } else { p.x = nx; p.z = nz; }
+      p.y += me.v.y * dt;
+      const gg = groundH(p.x, p.z);
+      if (p.y <= gg) { p.y = gg; me.v.y = 0; me.grounded = true; } else me.grounded = p.y - gg < 0.05;
+    }
+    const d = Math.hypot(p.x, p.z); if (d > WORLD_R + 40) { p.x *= (WORLD_R + 40) / d; p.z *= (WORLD_R + 40) / d; }
+  }
+
+  // ----- 使用手上的東西（左鍵）-----
+  const tg = findTarget();
+  if (me.dead <= 0 && !me.station && !me.carry && mouseDown && locked && me.useCD <= 0 && !anyOverlay()) useItem(tg, dt);
+  else if (!mouseDown) { me.repair = null; $('prog').classList.add('hidden'); }
+  // 提示
+  let pr = '';
+  if (tg && !me.station) pr = tg.lmb ? tg.t : `<b>E</b>${tg.t}`;
+  else if (!me.station && !me.carry && me.item === 1 && !me.onShip) { const qt = nearQuest(); if (qt) pr = '<b>左鍵</b>就在這附近！挖下去'; }
+  else if (!me.station && !me.carry && me.item === 3 && me.onShip) pr = me.bucket ? (me.lp.y > DECK - 0.4 ? '<b>左鍵</b>把水倒進海裡' : '水桶滿了，上甲板倒掉') : (S.water > 0.03 && me.lp.y < DECK - 1 ? '<b>左鍵</b>舀水' : '');
+  $('prompt').innerHTML = pr;
+
+  // ----- 攝影機 -----
+  const eyeH = me.swim ? 1.55 : 1.62;
+  if (me.onShip) camRig.position.set(me.lp.x, me.lp.y + eyeH, me.lp.z);
+  else camRig.position.set(me.wp.x, me.wp.y + eyeH, me.wp.z);
+  if (me.dead > 0) camRig.position.y -= 1.1;
+  if (me.station && me.station.cannon !== undefined) camRig.position.y += 0.3;
+  camRig.rotation.set(0, me.yaw, 0); camera.rotation.set(me.pitch, 0, (shake > 0 ? (Math.random() - .5) * shake * 0.05 : 0));
+  if (shake > 0) { camera.position.set((Math.random() - .5) * shake * 0.1, (Math.random() - .5) * shake * 0.1, 0); shake = Math.max(0, shake - dt * 1.5); } else camera.position.set(0, 0, 0);
+  const fov = me.zoom && me.item === 5 ? 16 : 72; if (Math.abs(camera.fov - fov) > 0.1) { camera.fov += (fov - camera.fov) * Math.min(1, dt * 10); camera.updateProjectionMatrix(); }
+  if (!me.onShip) { const cpos = myPos(); $('under').style.opacity = cpos.y < waveHeight(cpos.x, cpos.z) - 0.05 ? 1 : 0; } else $('under').style.opacity = 0;
+
+  // ----- 手上的道具 -----
+  heldItems.forEach((o, i) => o.visible = !me.station && me.dead <= 0 && (me.carry ? i === 6 : i === me.item));
+  heldItems[3].userData.w.visible = !!me.bucket;
+  swingT = Math.max(0, swingT - dt * 3);
+  const bob = Math.sin(performance.now() / 160) * Math.min(1, Math.hypot(me.v.x, me.v.z) / 4) * 0.015;
+  held.position.set(0.24, -0.24 + bob, -0.45);
+  held.rotation.set(-Math.sin(swingT * Math.PI) * 1.1, 0, 0);
+  if (me.carry) held.position.set(0.1, -0.5, -0.62);
+  // 藏寶圖疊層
+  const showT = me.item === 4 && !me.carry && !me.station && me.dead <= 0 && started && !anyOverlay(true);
+  $('tmap').classList.toggle('hidden', !showT);
+  if (showT) drawTreasureMap(W, me);
+
+  // ----- 傳送自己的姿態 -----
+  netT -= dt;
+  if (net && netT <= 0) {
+    netT = 0.1;
+    const p = me.onShip ? me.lp : me.wp;
+    send('p', { id: myId, n: me.name, c: me.color, s: me.onShip ? 1 : 0, p: [+p.x.toFixed(2), +p.y.toFixed(2), +p.z.toFixed(2)], y: +me.yaw.toFixed(2), it: me.item, ca: me.carry, d: me.dead > 0 ? 1 : 0, host: isHost ? 1 : 0 });
+  }
+}
+function nearQuest() {
+  for (const id of W.quests) { const t = W.treasures.find(t => t.id === id); if (t && t.st === 'buried' && Math.hypot(t.x - me.wp.x, t.z - me.wp.z) < 3.4) return t; }
+  return null;
+}
+function useItem(tg, dt) {
+  const S = W.ship;
+  switch (me.item) {
+    case 0: { // 劍
+      me.useCD = 0.45; swingT = 1; sfx.swing();
+      const eye = myPos(), dir = camera.getWorldDirection(new THREE.Vector3());
+      for (const c of W.crabs) { const v = new THREE.Vector3(c.x, terrainH(c.x, c.z) + 0.7, c.z).sub(eye); if (v.length() < 3.2 && v.normalize().dot(dir) > 0.45) { doAct({ a: 'hitcrab', id: c.id }); sfx.hit(0); break; } }
+      break;
+    }
+    case 1: { // 鏟子
+      me.useCD = 0.55; swingT = 1;
+      if (me.onShip) { toast('在船上不能挖！'); break; }
+      const g = groundH(me.wp.x, me.wp.z); if (g < waveHeight(me.wp.x, me.wp.z) - 0.6) break;
+      sfx.dig(); fx('dust', me.wp.x - Math.sin(me.yaw) * 1.2, g + 0.2, me.wp.z - Math.cos(me.yaw) * 1.2, 6);
+      const t = nearQuest();
+      if (t) { if (me.digTid !== t.id) { me.digTid = t.id; me.digProg = 0; } me.digProg++; toast(`挖呀挖⋯⋯（${me.digProg}/4）`); if (me.digProg >= 4) { doAct({ a: 'dig', tid: t.id }); me.digProg = 0; } }
+      else if (Math.random() < 0.3) toast('這裡只有沙子。對照藏寶圖（5）上的 X 位置再挖！');
+      break;
+    }
+    case 2: { // 木板補洞
+      if (!tg || tg.k !== 'hole' || !me.inv.planks) break;
+      if (!me.repair || me.repair.id !== tg.h.id) me.repair = { id: tg.h.id, t: 0 };
+      me.repair.t += dt; $('prog').classList.remove('hidden'); $('prog').firstElementChild.style.width = Math.min(100, me.repair.t / 1.3 * 100) + '%';
+      if (me.repair.t > 0.2 && Math.random() < dt * 4) sfx.thunk();
+      if (me.repair.t >= 1.3) { me.inv.planks--; doAct({ a: 'repair', h: tg.h.id }); me.repair = null; me.useCD = 0.4; $('prog').classList.add('hidden'); swingT = 1; }
+      break;
+    }
+    case 3: { // 水桶
+      me.useCD = 0.5; swingT = 1;
+      if (!me.onShip) { if (me.bucket) { me.bucket = 0; sfx.bucket(); } break; }
+      if (!me.bucket) { if (me.lp.y < DECK - 1 && S.water > 0.03) { me.bucket = 1; sfx.bucket(); } else toast(S.water > 0.03 ? '要在下層船艙才舀得到水' : '船艙沒有積水'); }
+      else { if (me.lp.y > DECK - 0.4) { me.bucket = 0; doAct({ a: 'dump' }); sfx.bucket(); const wp = localToWorld(me.lp.clone().add(new THREE.Vector3(-Math.sin(me.yaw) * 1.4, 1.2, -Math.cos(me.yaw) * 1.4))); fx('splash', wp.x, wp.y, wp.z, 8); } else toast('上甲板才能把水倒進海裡'); }
+      break;
+    }
+    case 4: break;
+    case 5: break;
+  }
+}
+
+// ---------- 每幀：場景物件 ----------
+function syncEntities(dt) {
+  const t = sea.t;
+  // 船
+  shipPoseCur = shipPose(W.ship, t, shipPoseCur);
+  myShip.root.position.set(W.ship.x, shipPoseCur.y, W.ship.z); myShip.root.quaternion.copy(shipPoseCur.quat);
+  myShip.update(W.ship, W.wind, dt, t);
+  myShip.light.intensity = (1 - lastDayL) * 40;
+  const seen = new Set();
+  for (const e of W.enemies) {
+    seen.add(e.id); let m = enemyMeshes.get(e.id);
+    if (!m) { m = buildShip(true); m.pose = {}; scene.add(m.root); enemyMeshes.set(e.id, m); }
+    shipPose(e, t, m.pose); m.root.position.set(e.x, m.pose.y, e.z); m.root.quaternion.copy(m.pose.quat); m.update(e, W.wind, dt, t);
+    m.light.intensity = (1 - lastDayL) * 30;
+  }
+  for (const [id, m] of enemyMeshes) if (!seen.has(id)) { scene.remove(m.root); enemyMeshes.delete(id); }
+  const inv = world.waterU.uShipInv.value; let ni = 0; inv[ni++].copy(shipPoseCur.inv);
+  for (const m of enemyMeshes.values()) if (ni < 4) inv[ni++].copy(m.pose.inv);
+  world.waterU.uShipN.value = ni;
+  // 寶藏
+  const tSeen = new Set();
+  for (const tr of W.treasures) {
+    if (tr.st === 'buried') continue;
+    if (tr.carrier === myId) { if (performance.now() - (me.dropT || 0) > 1200) me.carry = tr.id; if (me.carry === tr.id) continue; }
+    tSeen.add(tr.id); let m = treasureMeshes.get(tr.id);
+    if (!m) { m = tr.tier === 0 ? bottleMesh() : buildChest(tr.tier); treasureMeshes.set(tr.id, m); }
+    if (tr.st === 'ship') { if (m.parent !== myShip.cargo) myShip.cargo.add(m); m.position.set(tr.lx, tr.ly, tr.lz); m.rotation.set(0, tr.id, 0); }
+    else if (tr.st === 'carry') { const r = remotes.get(tr.carrier); if (r && r.mesh) { if (m.parent !== r.mesh) r.mesh.add(m); m.position.set(0, 0.9, 0.45); m.rotation.set(0, 0, 0); m.scale.setScalar(0.8); } else m.visible = false; }
+    else { if (m.parent !== scene) scene.add(m); m.scale.setScalar(1); m.visible = true; const fl = tr.st === 'float' || tr.st === 'bottle'; m.position.set(tr.x, fl ? waveHeight(tr.x, tr.z) - (tr.tier ? 0.25 : 0) : tr.y, tr.z); m.rotation.set(fl ? Math.sin(t + tr.id) * 0.2 : 0, tr.id * 1.3, fl ? Math.cos(t * 0.8 + tr.id) * 0.2 : 0); }
+  }
+  for (const [id, m] of treasureMeshes) if (!tSeen.has(id)) { m.parent?.remove(m); treasureMeshes.delete(id); }
+  if (me.carry && !W.treasures.some(t => t.id === me.carry && t.carrier === myId) && (isHost || performance.now() - (me.carryT || 0) > 1600)) me.carry = null;
+  if (me.carry && !W.treasures.some(t => t.id === me.carry)) me.carry = null;
+  if (me.carry) { const tr = W.treasures.find(t => t.id === me.carry); if (tr) { const ch = heldItems[6]; if (ch.userData.tier !== tr.tier) { held.remove(ch); heldItems[6] = buildChest(tr.tier); heldItems[6].scale.setScalar(0.7); heldItems[6].position.set(-0.32, -0.15, -0.35); heldItems[6].userData.tier = tr.tier; held.add(heldItems[6]); } } }
+  // 礁石蟹
+  const cSeen = new Set();
+  for (const c of W.crabs) {
+    cSeen.add(c.id); let m = crabMeshes.get(c.id); if (!m) { m = crabMesh(); scene.add(m); crabMeshes.set(c.id, m); m.position.set(c.x, terrainH(c.x, c.z), c.z); }
+    m.position.x += (c.x - m.position.x) * Math.min(1, dt * 8); m.position.z += (c.z - m.position.z) * Math.min(1, dt * 8); m.position.y = terrainH(m.position.x, m.position.z) + (c.mv ? Math.abs(Math.sin(t * 14)) * 0.08 : 0);
+    m.rotation.y = c.h;
+  }
+  for (const [id, m] of crabMeshes) if (!cSeen.has(id)) { fx('dust', m.position.x, m.position.y + 0.6, m.position.z, 14); scene.remove(m); crabMeshes.delete(id); }
+  // 砲彈
+  for (const [id, b] of ballVis) { b.v.y -= GRAV * dt; b.m.position.addScaledVector(b.v, dt); b.life -= dt; if (b.life <= 0 || b.m.position.y < -30) killBall(id); }
+  // 其他船員
+  const now = performance.now();
+  for (const [id, r] of remotes) {
+    if (now - r.last > 9000) { r.mesh?.parent?.remove(r.mesh); remotes.delete(id); toast(`${r.n} 失去連線`); continue; }
+    if (!r.mesh || !r.cur) continue;
+    const prev = r.mesh.position.clone();
+    for (let i = 0; i < 3; i++) r.cur[i] += (r.p[i] - r.cur[i]) * Math.min(1, dt * 10);
+    r.mesh.position.fromArray(r.cur); r.mesh.rotation.y = r.y + Math.PI;
+    r.mesh.visible = !r.d;
+    r.mesh.userData.animate(prev.distanceTo(r.mesh.position) / Math.max(dt, 1e-3), dt);
+  }
+  // 大砲軌跡
+  if (me.station && me.station.cannon !== undefined) {
+    const { p, dir } = cannonMuzzle(W.ship, me.station.cannon, shipPoseCur); const [vx, vz] = shipVel(W.ship);
+    const v = new THREE.Vector3(dir.x * BALL_V + vx, dir.y * BALL_V, dir.z * BALL_V + vz), a = trajGeo.attributes.position, q = p.clone();
+    let n = 0; for (; n < 60; n++) { a.setXYZ(n, q.x, q.y, q.z); v.y -= GRAV * 0.1; q.addScaledVector(v, 0.1); if (q.y < waveHeight(q.x, q.z)) { a.setXYZ(++n < 60 ? n : 59, q.x, q.y, q.z); n++; break; } }
+    for (let i = n; i < 60; i++) a.setXYZ(i, q.x, q.y, q.z);
+    a.needsUpdate = true; traj.computeLineDistances(); traj.visible = true;
+  } else traj.visible = false;
+}
+
+// ---------- HUD ----------
+let lastDayL = 1, hudT = 0, lastIsland = null;
+function updateHUD(dt) {
+  hudT -= dt; if (hudT > 0) return; hudT = 0.12;
+  const S = W.ship;
+  $('gold').textContent = `${W.gold.toLocaleString()} 金`;
+  $('spd').textContent = `${(Math.abs(S.speed) * 1.94).toFixed(1)} 節`;
+  const dir = camera.getWorldDirection(new THREE.Vector3()); const camH = Math.atan2(dir.x, dir.z);
+  // 風吹往 wind.a；箭頭顯示相對於視線的風向
+  $('wind').style.transform = `rotate(${(-(W.wind.a - camH)) * 180 / Math.PI}deg)`; $('windS').textContent = W.wind.s > 0.85 ? '強' : W.wind.s > 0.7 ? '中' : '弱';
+  $('sailV').textContent = S.sail < 0.05 ? '收起' : `放下 ${Math.round(S.sail * 100)}%`;
+  $('anchorV').textContent = S.anchorDir < 0 ? '起錨中⋯⋯' : S.anchor > 0.5 ? '已下錨' : '已起錨';
+  $('waterV').textContent = `${Math.round(S.water * 100)}%`; $('waterB').style.width = S.water * 100 + '%'; $('waterB').style.background = S.water > 0.6 ? '#e05a3a' : '#4fb3c9';
+  $('holesV').textContent = S.holes.length ? `${S.holes.length} 個（快補！）` : '0';
+  $('holesV').style.color = S.holes.length ? '#ff9a7a' : '';
+  $('supV').textContent = `砲彈 ${S.balls}／木板 ${S.planks}`;
+  $('cargoV').textContent = W.treasures.filter(t => t.st === 'ship').length;
+  updateHotbar(me); $('invB').textContent = me.inv.balls; $('invP').textContent = me.inv.planks;
+  $('hpV').textContent = Math.max(0, Math.round(me.hp)); $('hpB').style.width = Math.max(0, me.hp) + '%';
+  // 羅盤
+  const labels = []; for (let d = -360; d <= 720; d += 15) { const n = ((d % 360) + 360) % 360; labels.push(n === 0 ? '<b style="color:#f2c14e">北</b>' : n === 90 ? '<b>東</b>' : n === 180 ? '<b>南</b>' : n === 270 ? '<b>西</b>' : n % 45 === 0 ? '◆' : '·'); }
+  // 世界 -z = 北、+x = 東
+  const strip = $('cstrip'); if (!strip.dataset.k) { strip.innerHTML = labels.map(l => `<span>${l}</span>`).join(''); strip.dataset.k = 1; }
+  const w = $('compass').clientWidth;
+  const hdg = ((Math.atan2(dir.x, -dir.z) * 180 / Math.PI) + 360) % 360;   // 以北為 0、順時針
+  strip.style.left = (w / 2 - ((hdg + 360) / 15) * 40 - 20) + 'px';
+  // 船員列表
+  const crew = [`<div>⚓ ${esc(me.name)}（你）</div>`, ...[...remotes.values()].map(r => `<div>⚓ ${esc(r.n || '船員')}</div>`)];
+  $('crew').innerHTML = crew.join('');
+  // 任務
+  $('quests').innerHTML = W.quests.length ? '📜 藏寶圖：' + W.quests.map(id => { const t = W.treasures.find(x => x.id === id); return t ? esc(ISLANDS[t.isl].name) : ''; }).join('、') + '<br><span style="opacity:.75">按 5 拿出藏寶圖，Q 切換</span>' : '📜 沒有藏寶圖：回潮聲港找阿海領取';
+  // 抵達島嶼
+  const cp = myPos(); const ni = nearestIsland(cp.x, cp.z);
+  const isl = ni.d < 40 ? ni.I : null; if (isl && isl !== lastIsland) toast(`— ${isl.name} —`); lastIsland = isl;
+  if (!$('mapOv').classList.contains('hidden')) drawMap(W, me, cp, remotes);
+}
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+// ---------- 主迴圈 ----------
+let last = performance.now(), stT = 0, ambT = 0;
+function frame(now) {
+  requestAnimationFrame(frame);
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (started) {
+    if (isHost) { step(W, dt, simPlayers()); flushEvents(); stT -= dt; if (net && stT <= 0) { stT = 0.1; send('st', pack(W)); } }
+    else { sea.t += dt; W.t = sea.t; sea.amp = W.amp; smoothShips(W, dt); }
+    updatePlayer(dt);
+  } else { sea.t += dt; W.t = sea.t; W.ship.anchor = 1; }
+  syncEntities(dt);
+  stepFx(dt);
+  const r = world.update(W, dt, () => setTimeout(() => sfx.thunder(), 300 + Math.random() * 800)); lastDayL = r.dayL;
+  if (started) updateHUD(dt);
+  else { // 標題畫面：繞著船轉
+    const a = now / 9000; camRig.position.set(Math.sin(a) * 26, 9 + Math.sin(a * 0.7) * 2, Math.cos(a) * 26 - 2); camRig.rotation.set(0, a, 0); camera.rotation.set(-0.25, 0, 0);
+  }
+  ambT -= dt; if (ambT <= 0) { ambT = 0.25; const cp = myPos(); ambient(W.amp / 2, W.storm.on, Math.abs(W.ship.speed), cp.y < waveHeight(cp.x, cp.z)); if (W.ship.speed > 2 && Math.random() < 0.08 && me.onShip) sfx.creak(); }
+  renderer.render(scene, camera);
+}
+requestAnimationFrame(frame);
+
+// ---------- 開始遊戲 ----------
+function beginPlay() {
+  started = true; $('title').classList.add('hidden'); $('hud').classList.remove('hidden');
+  me.onShip = true; me.lp.set(0, DECK, -6.5); me.yaw = Math.PI; me.pitch = 0; reparentCam();
+  camRig.rotation.set(0, 0, 0);
+  if (!localStorage.getItem('tb_help')) { $('helpOv').classList.remove('hidden'); try { localStorage.setItem('tb_help', 1); } catch (e) {} }
+  else $('pause').classList.remove('hidden');
+  toast('⚓ 船停在潮聲港。到船頭絞盤起錨、放帆、掌舵出航吧！');
+  setTimeout(() => toast('📜 你們有 2 張藏寶圖。按 5 拿出來看，M 打開航海圖'), 4000);
+  if (net) $('netst').textContent = (isHost ? '房主' : '船員') + '｜房號 ' + room;
+}
+initUI({
+  onSolo(name, color) { me.name = name; me.color = color; isHost = true; W = newWorld(); initAudio(); beginPlay(); },
+  async onHost(name, color) {
+    me.name = name; me.color = color; isHost = true; W = newWorld(); room = Array.from({ length: 5 }, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ'[Math.random() * 24 | 0]).join('');
+    net = location.hash === '#local' ? new LocalNet(room, myId) : new MqttNet(room, myId); net.on('msg', onNet); net.on('status', s => $('netst').textContent = s === 'ok' ? `房主｜房號 ${room}` : '連線中斷，重新連線中⋯⋯');
+    await net.connect(); return room;
+  },
+  startHosted() { initAudio(); beginPlay(); },
+  async onJoin(name, color, code) {
+    me.name = name; me.color = color; isHost = false; room = code;
+    net = location.hash === '#local' ? new LocalNet(room, myId) : new MqttNet(room, myId); net.on('msg', onNet); net.on('status', s => $('netst').textContent = s === 'ok' ? `船員｜房號 ${room}` : '連線中斷，重新連線中⋯⋯');
+    await net.connect(); initAudio();
+    const hi = () => send('p', { id: myId, n: me.name, c: me.color, s: 1, p: [0, DECK, -6], y: 0, it: 0, ca: null, d: 0 });
+    hi();
+    return new Promise((res, rej) => { const t0 = performance.now(); const iv = setInterval(() => { if (started) { clearInterval(iv); res(); } else if (performance.now() - t0 > 12000) { clearInterval(iv); rej(new Error('找不到這個房間（房主要先按「出航」）')); } else hi(); }, 800); });
+  },
+  colors: COLORS,
+});
+addEventListener('beforeunload', () => { if (net) send('bye', { id: myId, host: isHost ? 1 : 0 }); });
+window.__tb = { enemyMeshes, myShip, camera, W: () => W, me, setW: w => W = w, scene, world, act: m => doAct(m), handleEvent };   // 除錯用

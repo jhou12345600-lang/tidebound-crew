@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>怒海同舟 3D｜多人同船航海冒險</title>
+<meta name="description" content="和好友一起開同一艘船：升帆、掌舵、補船洞、開砲、照藏寶圖挖寶。網頁版 3D 多人航海遊戲。">
+<meta name="theme-color" content="#0b2c3d">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='46' fill='%2316707a'/><path d='M14 62 Q26 50 38 62 T62 62 T86 62 V86 H14Z' fill='%23f3ead2'/><path d='M50 14 L56 40 L50 48 L44 40Z' fill='%23c4422b'/></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@500;700;900&family=Noto+Serif+TC:wght@900&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.170.0/build/three.module.js","three/addons/":"https://unpkg.com/three@0.170.0/examples/jsm/"}}</script>
+<style>
+/* VOICE 熱血、有海風味的冒險；IDEA 舊航海圖與船上木牌；PICTURE 全螢幕 3D 海景；COLOUR 深海藍底、羊皮紙、藤壺綠與信號紅；TYPE 標題 Noto Serif TC 900、內文 Noto Sans TC；LAYOUT HUD 貼四角，中間留給海 */
+*{box-sizing:border-box;min-width:0}
+:root{--sea:#0b2c3d;--paper:#f3ead2;--paper2:#e4d3a8;--ink:#2b1d12;--teal:#16707a;--red:#c4422b;--gold:#f2c14e}
+html,body{margin:0;height:100%;overflow:hidden;background:var(--sea);color:#fff;font-family:"Noto Sans TC",system-ui,sans-serif;user-select:none;-webkit-user-select:none}
+#cv{position:fixed;inset:0;width:100%;height:100%;display:block}
+.hidden{display:none!important}
+button{font-family:inherit;cursor:pointer;border:0;border-radius:10px;font-weight:700;font-size:16px;padding:12px 16px;min-height:44px;background:var(--paper);color:var(--ink);box-shadow:0 3px 0 rgba(0,0,0,.35);transition:transform .08s}
+button:hover{filter:brightness(1.06)}button:active{transform:translateY(2px);box-shadow:0 1px 0 rgba(0,0,0,.35)}
+button:focus-visible,input:focus-visible{outline:3px solid var(--gold);outline-offset:2px}
+button:disabled{opacity:.45;pointer-events:none}
+.pri{background:linear-gradient(#f5cf63,#e0a92d);color:#3a2604}.tealb{background:linear-gradient(#2a8f99,#16707a);color:#fff}.redb{background:linear-gradient(#d65a42,#a83521);color:#fff}
+input{font-family:inherit;font-size:16px;padding:10px 12px;border-radius:10px;border:2px solid #c9b88c;width:100%;background:#fffaf0;color:var(--ink)}
+/* 標題畫面 */
+#title{position:fixed;inset:0;z-index:30;display:flex;align-items:center;justify-content:flex-start;padding:4vw 6vw;background:linear-gradient(90deg,rgba(6,22,32,.88) 0%,rgba(6,22,32,.55) 45%,rgba(6,22,32,0) 75%)}
+.card{width:min(440px,100%);background:var(--paper);color:var(--ink);border-radius:18px;padding:24px;box-shadow:0 18px 50px rgba(0,0,0,.45);background-image:radial-gradient(circle at 20% 10%,rgba(255,255,255,.5),transparent 60%),repeating-linear-gradient(0deg,rgba(120,90,40,.04) 0 2px,transparent 2px 6px)}
+.card h1{font-family:"Noto Serif TC",serif;font-size:46px;line-height:1.05;margin:0;color:var(--ink);letter-spacing:4px}
+.card h1 small{display:block;font-family:"Noto Sans TC";font-size:15px;letter-spacing:1px;color:var(--teal);margin-top:8px;font-weight:700}
+.card p{margin:10px 0 14px;font-size:15px;line-height:1.6;color:#5b4630}
+.lab{font-size:13px;font-weight:700;color:#7a6040;margin:12px 0 6px}
+.cols{display:flex;gap:8px;flex-wrap:wrap}.cols button{width:44px;height:44px;border-radius:50%;padding:0;border:3px solid transparent}.cols button.sel{border-color:var(--ink)}
+.row{display:flex;gap:8px;margin-top:10px}.row>*{flex:1}
+.note{font-size:13px;color:#7a6040;margin-top:12px;line-height:1.5}
+#roomBox{margin-top:12px;background:#fffaf0;border:2px dashed #c9b88c;border-radius:12px;padding:12px}
+#roomBox .code{font-size:34px;font-weight:900;letter-spacing:8px;color:var(--teal);text-align:center}
+#roomBox .lnk{font-size:13px;word-break:break-all;color:#5b4630;text-align:center;margin:6px 0}
+/* HUD */
+#hud{position:fixed;inset:0;pointer-events:none;z-index:10;font-weight:700;text-shadow:0 1px 3px rgba(0,0,0,.8)}
+#cross{position:absolute;left:50%;top:50%;width:6px;height:6px;margin:-3px;border-radius:50%;background:#fff;box-shadow:0 0 0 2px rgba(0,0,0,.45)}
+#prompt{position:absolute;left:50%;top:calc(50% + 34px);transform:translateX(-50%);background:rgba(10,25,35,.72);padding:8px 14px;border-radius:10px;font-size:16px;white-space:nowrap}
+#prompt:empty{display:none}
+#prompt b{display:inline-block;background:var(--paper);color:var(--ink);border-radius:6px;padding:0 7px;margin-right:6px;text-shadow:none}
+#prog{position:absolute;left:50%;top:calc(50% + 74px);width:160px;height:8px;margin-left:-80px;background:rgba(0,0,0,.5);border-radius:4px;overflow:hidden}#prog i{display:block;height:100%;background:var(--gold);width:0}
+#compass{position:absolute;top:12px;left:50%;width:min(520px,70vw);height:34px;transform:translateX(-50%);overflow:hidden;background:linear-gradient(90deg,transparent,rgba(10,25,35,.6) 15%,rgba(10,25,35,.6) 85%,transparent);border-radius:8px}
+#compass .strip{position:absolute;top:0;height:34px;white-space:nowrap;font-size:14px;line-height:34px}
+#compass .strip span{display:inline-block;width:40px;text-align:center}
+#compass:after{content:'';position:absolute;left:50%;top:0;width:2px;height:100%;background:var(--gold)}
+#topL{position:absolute;top:14px;left:16px;font-size:15px;line-height:1.7}
+#gold{font-size:22px;color:var(--gold)}
+#crew div{font-size:13px;font-weight:500}
+#quests{margin-top:6px;font-size:13px;font-weight:500;max-width:260px}
+#shipPanel{position:absolute;top:56px;right:16px;width:230px;background:rgba(10,25,35,.62);border-radius:12px;padding:10px 12px;font-size:14px;line-height:1.7}
+#shipPanel .bar{height:8px;border-radius:4px;background:rgba(255,255,255,.18);overflow:hidden;margin:2px 0 6px}#shipPanel .bar i{display:block;height:100%;background:#4fb3c9}
+#shipPanel .k{display:flex;justify-content:space-between}
+#wind{display:inline-block;transition:transform .3s}
+#hp{position:absolute;left:16px;bottom:18px;width:220px}#hp .bar{height:12px;border-radius:6px;background:rgba(0,0,0,.5);overflow:hidden;border:2px solid rgba(255,255,255,.4)}#hp .bar i{display:block;height:100%;background:linear-gradient(90deg,#c4422b,#e8703a)}
+#hotbar{position:absolute;bottom:14px;left:50%;transform:translateX(-50%);display:flex;gap:6px}
+#hotbar div{width:62px;height:62px;border-radius:10px;background:rgba(10,25,35,.6);border:2px solid rgba(255,255,255,.25);display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:12px;position:relative}
+#hotbar div svg{width:28px;height:28px;margin-bottom:2px}
+#hotbar div.sel{border-color:var(--gold);background:rgba(60,45,15,.7)}
+#hotbar div em{position:absolute;top:2px;left:5px;font-style:normal;font-size:11px;opacity:.7}
+#hotbar div u{position:absolute;bottom:2px;right:5px;text-decoration:none;font-size:12px;color:var(--gold)}
+#station{position:absolute;bottom:96px;left:50%;transform:translateX(-50%);background:rgba(10,25,35,.72);padding:8px 14px;border-radius:10px;font-size:14px;text-align:center}
+#station:empty{display:none}
+#toasts{position:absolute;top:60px;left:50%;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:6px;width:min(560px,90vw)}
+#toasts div{background:rgba(10,25,35,.78);padding:8px 14px;border-radius:10px;font-size:15px;animation:tin .25s ease-out;text-align:center}
+#toasts div.warn{background:rgba(150,40,25,.85)}
+@keyframes tin{from{opacity:0;transform:translateY(-6px)}}
+#chat{position:absolute;left:16px;bottom:64px;width:min(360px,40vw);font-size:14px;font-weight:500}
+#chat .l div{background:rgba(10,25,35,.45);padding:2px 8px;border-radius:6px;margin-top:3px;width:fit-content;max-width:100%}
+#chatIn{pointer-events:auto;margin-top:6px;font-size:14px;padding:6px 10px}
+#hurt{position:absolute;inset:0;background:radial-gradient(transparent 50%,rgba(170,20,10,.6));opacity:0;transition:opacity .4s}
+#under{position:absolute;inset:0;background:rgba(10,60,80,.45);opacity:0}
+/* 疊層面板 */
+.ov{position:fixed;inset:0;z-index:20;display:flex;align-items:center;justify-content:center;background:rgba(4,14,20,.55);padding:16px}
+.sheet{background:var(--paper);color:var(--ink);border-radius:16px;padding:20px;width:min(560px,100%);max-height:94vh;overflow:auto;box-shadow:0 18px 50px rgba(0,0,0,.5)}
+.sheet h2{margin:0 0 10px;font-family:"Noto Serif TC",serif;font-size:30px;line-height:1.1}
+.sheet .btns{display:flex;flex-direction:column;gap:8px;margin-top:10px}
+.keys{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:15px;line-height:1.4}
+.keys b{background:#fffaf0;border:2px solid #c9b88c;border-radius:6px;padding:1px 8px;text-align:center;white-space:nowrap}
+#mapOv canvas{width:min(84vh,92vw);height:min(84vh,92vw);border-radius:14px;box-shadow:0 18px 50px rgba(0,0,0,.5)}
+#tmap canvas{width:min(60vh,80vw);height:min(60vh,80vw)}
+#pause{position:fixed;inset:0;z-index:15;display:flex;align-items:center;justify-content:center;pointer-events:none}
+#pause div{background:rgba(10,25,35,.8);padding:14px 22px;border-radius:12px;font-size:18px;font-weight:700}
+#dead{position:fixed;inset:0;z-index:16;display:flex;align-items:center;justify-content:center;background:rgba(30,5,5,.55);font-size:26px;font-weight:900;text-shadow:0 2px 6px #000}
+#netst{position:absolute;right:16px;bottom:16px;font-size:12px;font-weight:500;opacity:.8}
+@media(max-width:700px){#title{background:rgba(6,22,32,.75);justify-content:center}.card h1{font-size:36px}#shipPanel{width:180px;font-size:12px}#hotbar div{width:48px;height:48px}}
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+<div id="hud" class="hidden">
+  <div id="under"></div><div id="hurt"></div>
+  <div id="compass"><div class="strip" id="cstrip"></div></div>
+  <div id="topL"><div id="gold">0 金</div><div id="crew"></div><div id="quests"></div></div>
+  <div id="shipPanel">
+    <div class="k"><span>船速</span><span id="spd">0 節</span></div>
+    <div class="k"><span>風向</span><span><span id="wind">⬆</span> <span id="windS"></span></span></div>
+    <div class="k"><span>帆</span><span id="sailV">收起</span></div>
+    <div class="k"><span>錨</span><span id="anchorV">已下錨</span></div>
+    <div class="k"><span>船艙進水</span><span id="waterV">0%</span></div><div class="bar"><i id="waterB"></i></div>
+    <div class="k"><span>破洞</span><span id="holesV">0</span></div>
+    <div class="k"><span>船上補給</span><span id="supV">砲彈 30／木板 18</span></div>
+    <div class="k"><span>船上寶箱</span><span id="cargoV">0</span></div>
+  </div>
+  <div id="cross"></div><div id="prompt"></div><div id="prog" class="hidden"><i></i></div>
+  <div id="station"></div>
+  <div id="toasts"></div>
+  <div id="chat"><div class="l" id="chatL"></div><input id="chatIn" class="hidden" maxlength="80" placeholder="輸入訊息，Enter 送出"></div>
+  <div id="hp"><div style="font-size:13px;margin-bottom:3px">體力 <span id="hpV">100</span>　身上：砲彈 <span id="invB">0</span>／木板 <span id="invP">0</span></div><div class="bar"><i id="hpB" style="width:100%"></i></div></div>
+  <div id="hotbar"></div>
+  <div id="netst"></div>
+</div>
+<div id="pause" class="hidden"><div>點一下畫面繼續（H 看操作說明）</div></div>
+<div id="dead" class="hidden">你被打倒了⋯⋯ <span id="deadT">6</span> 秒後在船上醒來</div>
+
+<div id="title">
+  <div class="card">
+    <h1>怒海同舟<small>3D 多人同船航海冒險</small></h1>
+    <p>和好友擠上同一艘帆船：有人掌舵、有人調帆、有人下艙補洞舀水、有人開砲。照著藏寶圖上島挖寶，扛回潮聲港換金幣，小心黑鯊海盜團與暴風雨。</p>
+    <div class="lab">船員名字</div>
+    <input id="nameIn" maxlength="10" placeholder="例如：阿浪">
+    <div class="lab">衣服顏色</div>
+    <div class="cols" id="cols"></div>
+    <div class="row"><button class="pri" id="bSolo">單人出航</button></div>
+    <div class="row"><button class="tealb" id="bHost">建立房間</button><button id="bJoin">加入房間</button></div>
+    <div id="joinBox" class="hidden"><div class="lab">輸入房號</div><div class="row"><input id="codeIn" maxlength="5" placeholder="ABCDE" style="text-transform:uppercase;letter-spacing:4px"><button class="tealb" id="bJoinGo">上船</button></div></div>
+    <div id="roomBox" class="hidden"><div class="lab" style="margin-top:0">把房號或網址傳給朋友</div><div class="code" id="roomCode"></div><div class="lnk" id="roomLink"></div><div class="row"><button id="bCopy">複製網址</button><button class="pri" id="bStart">出航</button></div></div>
+    <div class="note" id="tnote">電腦版遊戲：滑鼠＋鍵盤操作。最多建議 4 人同船。</div>
+  </div>
+</div>
+
+<div id="helpOv" class="ov hidden"><div class="sheet"><h2>船員手冊</h2>
+  <div class="keys">
+    <b>W A S D</b><span>走路（Shift 跑步、空白鍵跳／游上去）</span>
+    <b>滑鼠</b><span>看方向；左鍵使用手上的東西</span>
+    <b>E</b><span>互動：掌舵、調帆、絞盤起／下錨、操作大砲、拿補給、撿寶箱、爬梯子、找收購商</span>
+    <b>1–6</b><span>劍、鏟子、木板、水桶、藏寶圖、望遠鏡（滾輪也能換）</span>
+    <b>G</b><span>放下扛著的寶箱</span>
+    <b>R</b><span>在大砲旁裝填砲彈</span>
+    <b>右鍵</b><span>拿望遠鏡時放大</span>
+    <b>M</b><span>航海圖</span>
+    <b>Enter</b><span>聊天</span>
+  </div>
+  <p style="line-height:1.6;font-size:15px"><b>出航三步：</b>船頭絞盤按 E 起錨 → 桅杆旁按 E，用 W/S 放帆、A/D 轉帆吃風 → 船尾舵輪按 E，A/D 轉向。<br><b>船被打破：</b>到下層船艙找破洞，拿木板（3）對著洞按住左鍵修補；用水桶（4）在艙裡舀水，到甲板再按左鍵倒掉。補給品在船艙後方的箱子拿。<br><b>挖寶：</b>拿藏寶圖（5）對照島的形狀與 X，上島後拿鏟子（2）在 X 處挖，扛回船上，開回潮聲港賣給收購商。</p>
+  <div class="btns"><button class="pri" id="bHelpX">知道了</button></div></div></div>
+
+<div id="mapOv" class="ov hidden"><canvas id="mapCv" width="900" height="900"></canvas></div>
+<div id="tmap" class="ov hidden" style="background:transparent;pointer-events:none"><canvas id="tmapCv" width="600" height="600"></canvas></div>
+<div id="shopOv" class="ov hidden"><div class="sheet"><h2>收購商 阿海</h2><p id="shopTxt" style="line-height:1.6"></p><div class="btns" id="shopBtns"></div></div></div>
+<div id="msgOv" class="ov hidden"><div class="sheet"><h2 id="msgH"></h2><p id="msgP" style="line-height:1.6"></p><div class="btns"><button class="pri" id="msgB">好</button></div></div></div>
+
+<script type="module">
+/*__CODE__*/
+</script>
+</body>
+</html>
